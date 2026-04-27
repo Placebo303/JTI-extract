@@ -1,0 +1,624 @@
+{
+  "ttbin": "D:\\Data\\Raw Data\\Type0ppln JTI\\TimeTags_2026-04-03_213758.1.ttbin",
+  "output_dir": "results\\tdc_layer_scan_smoke",
+  "parameters": {
+    "ttbin": "D:\\Data\\Raw Data\\Type0ppln JTI\\TimeTags_2026-04-03_213758.1.ttbin",
+    "out": ".\\results\\tdc_layer_scan_smoke",
+    "ch_a": 1,
+    "ch_b": 3,
+    "window_ps": 1000,
+    "period_start_ps": 10,
+    "period_stop_ps": 100,
+    "period_step_ps": 1,
+    "hist_bin_ps": 1,
+    "time_splits": 20,
+    "surrogate_block_ms": "1,10,100",
+    "surrogate_shifts": 10,
+    "seed": 12345,
+    "bin_widths_ps": "20,25,30,35,40,50,60,80",
+    "dims": "4,8,16",
+    "frame_origin_ps": 0.0,
+    "max_events": 500000,
+    "skip_surrogates": false,
+    "skip_folding": false
+  },
+  "tag_meta": {
+    "ttbin": "D:\\Data\\Raw Data\\Type0ppln JTI\\TimeTags_2026-04-03_213758.1.ttbin",
+    "ttbin_size": 48180288,
+    "ttbin_mtime_ns": 1775223481998473600,
+    "ch_a": 1,
+    "ch_b": 3,
+    "max_events": 500000,
+    "cache_path": "results\\tdc_layer_scan_smoke\\tags_cache_ch1_ch3.npz",
+    "n_events_read": 500000,
+    "n_ch_a": 227847,
+    "n_ch_b": 245660,
+    "span_ps": 118350500986,
+    "span_s": 0.118350500986,
+    "event_type_counts": {
+      "0": 500000
+    },
+    "channel_counts": {
+      "1": 227847,
+      "3": 245660,
+      "1003": 26493
+    },
+    "file_configuration": {
+      "channel number scheme": 2,
+      "configure version": 1,
+      "current time": "2026-04-03 21:37:58 +0800",
+      "devices": [
+        {
+          "FPGA ID": 103836255240889029,
+          "PCB UID": "PVX787--01-002D-002B",
+          "PCB version": "1.2 (3)",
+          "minimum software version": "2.14.0",
+          "model": "Time Tagger X",
+          "serial": "2413001AYQ"
+        }
+      ],
+      "firmware version": "TT-X, FW6, TS 2026-02-17 17:31:28, OK 1.51",
+      "fpga link": {
+        "enabled": false
+      },
+      "hardware buffer size": 67108864,
+      "inputs": [
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            1,
+            -1
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            46,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            0,
+            0
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            2,
+            -2
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            443,
+            443
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            3,
+            -3
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            583,
+            583
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            4,
+            -4
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            334,
+            334
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        }
+      ],
+      "led bitmask": 0,
+      "led disable": false,
+      "measurements": [
+        {
+          "name": "Correlation",
+          "params": {
+            "binwidth": 1,
+            "channel 1": 2,
+            "channel 2": 1,
+            "n bins": 2000
+          },
+          "registered channels": [
+            2,
+            1
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Counter",
+          "params": {
+            "binwidth": 20000000000,
+            "channels": [
+              1,
+              2
+            ],
+            "n values": 3000
+          },
+          "registered channels": [
+            1,
+            2
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "FrequencyCounter",
+          "params": {
+            "channels": [
+              1,
+              2
+            ],
+            "fitting_window": 20000000000,
+            "n_values": 3000,
+            "sampling_interval": 20000000000
+          },
+          "registered channels": [
+            1,
+            2
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Coincidences",
+          "params": {
+            "groups": [
+              [
+                1,
+                3
+              ]
+            ],
+            "type": 0,
+            "window": 1000
+          },
+          "registered channels": [
+            1,
+            3
+          ],
+          "virtual channels": [
+            1003
+          ]
+        },
+        {
+          "name": "Counter",
+          "params": {
+            "binwidth": 100000000000,
+            "channels": [
+              1,
+              3,
+              1003
+            ],
+            "n values": 100
+          },
+          "registered channels": [
+            1,
+            3,
+            1003
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Correlation",
+          "params": {
+            "binwidth": 1,
+            "channel 1": 3,
+            "channel 2": 1,
+            "n bins": 200
+          },
+          "registered channels": [
+            3,
+            1
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Counter",
+          "params": {
+            "binwidth": 20000000000,
+            "channels": [
+              1,
+              3
+            ],
+            "n values": 3000
+          },
+          "registered channels": [
+            1,
+            3
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "FrequencyCounter",
+          "params": {
+            "channels": [
+              1,
+              3
+            ],
+            "fitting_window": 20000000000,
+            "n_values": 3000,
+            "sampling_interval": 20000000000
+          },
+          "registered channels": [
+            1,
+            3
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Countrate",
+          "params": {
+            "channels": [
+              1,
+              2
+            ]
+          },
+          "registered channels": [
+            1,
+            2
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "FileWriter",
+          "params": {
+            "channels": [
+              1,
+              3,
+              1003
+            ],
+            "filename": "C:\\Users\\PC\\Documents\\Time Tagger Lab\\Time Tag Files\\TimeTags_2026-04-03_213758.ttbin"
+          },
+          "registered channels": [
+            1,
+            3,
+            1003
+          ],
+          "virtual channels": []
+        }
+      ],
+      "network": {
+        "client count": 0,
+        "protocol version major": 4,
+        "protocol version minor": 1,
+        "server binding address": "0.0.0.0",
+        "server running": false,
+        "server runs": 0
+      },
+      "registered channels": [
+        1,
+        2,
+        3
+      ],
+      "resolution": "Standard",
+      "serial": "2413001AYQ",
+      "software clock": null,
+      "software version": "2.21.2",
+      "stream block size events": 1048576,
+      "stream block size latency": 20,
+      "test signal divider": 504,
+      "test signal source": "Digital"
+    }
+  },
+  "singles_summary": {
+    "ch_a": {
+      "period40": {
+        "period_ps": 40,
+        "n_pairs": 227847,
+        "amplitude": 0.0022188051864167023,
+        "phase_rad": 0.6031397313930297,
+        "phase_ps": 3.8397067850527473,
+        "chi2_reduced": 0.5905527247085398,
+        "cv": 0.010054025559406033
+      },
+      "best": {
+        "period_ps": 16,
+        "amplitude": 0.1032831617569934,
+        "phase_rad": -0.582744644039153,
+        "phase_ps": 14.516052949453469
+      },
+      "hist40": {
+        "total": 227847,
+        "bins": 40,
+        "mean": 5696.175,
+        "min": 5583,
+        "max": 5818,
+        "cv": 0.010054025559406033,
+        "chi2_reduced": 0.5905527247085398,
+        "peak_to_peak_over_mean": 0.04125575495837119,
+        "max_over_mean": 1.0213871589268237,
+        "min_over_mean": 0.9801314039684524
+      }
+    },
+    "ch_b": {
+      "period40": {
+        "period_ps": 40,
+        "n_pairs": 245660,
+        "amplitude": 0.0027356080086430356,
+        "phase_rad": 0.8598295715870602,
+        "phase_ps": 5.473845061386693,
+        "chi2_reduced": 1.1895699079611803,
+        "cv": 0.013742320231471887
+      },
+      "best": {
+        "period_ps": 16,
+        "amplitude": 0.10222016643256082,
+        "phase_rad": -0.5640231128417926,
+        "phase_ps": 14.563726937170413
+      },
+      "hist40": {
+        "total": 245660,
+        "bins": 40,
+        "mean": 6141.5,
+        "min": 5971,
+        "max": 6315,
+        "cv": 0.013742320231471887,
+        "chi2_reduced": 1.1895699079611803,
+        "peak_to_peak_over_mean": 0.05601237482699666,
+        "max_over_mean": 1.0282504274200115,
+        "min_over_mean": 0.9722380525930148
+      }
+    }
+  },
+  "pairing_layer_summary": {
+    "all_pairs": {
+      "layer": "all_pairs",
+      "n_pairs": 26494,
+      "A40": 0.006046220659786705,
+      "phase40_rad": -2.650676842209285,
+      "phase40_ps": 23.12526712092706,
+      "cv40": 0.04098081930284308,
+      "chi2_40": 1.140891116130793,
+      "best_period_ps": 100,
+      "best_amplitude": 0.3991021180885698,
+      "best_phase_rad": -0.012196232029587776,
+      "best_phase_ps": 99.80589093853953
+    },
+    "nearest": {
+      "layer": "nearest",
+      "n_pairs": 26494,
+      "A40": 0.006046220659786703,
+      "phase40_rad": -2.650676842209285,
+      "phase40_ps": 23.12526712092706,
+      "cv40": 0.04098081930284308,
+      "chi2_40": 1.140891116130793,
+      "best_period_ps": 100,
+      "best_amplitude": 0.3991021180885697,
+      "best_phase_rad": -0.012196232029587776,
+      "best_phase_ps": 99.80589093853953
+    },
+    "greedy_unique": {
+      "layer": "greedy_unique",
+      "n_pairs": 26494,
+      "A40": 0.006046220659786703,
+      "phase40_rad": -2.650676842209285,
+      "phase40_ps": 23.12526712092706,
+      "cv40": 0.04098081930284308,
+      "chi2_40": 1.140891116130793,
+      "best_period_ps": 100,
+      "best_amplitude": 0.3991021180885697,
+      "best_phase_rad": -0.012196232029587776,
+      "best_phase_ps": 99.80589093853953
+    }
+  },
+  "surrogate_shift_summary": {
+    "A40_mean": 0.04975895760372617,
+    "A40_std": 0.035138951236034305,
+    "surrogate_A40_ratio": 8.229762094968187,
+    "best_period_mode": 23,
+    "n_replicates": 10
+  },
+  "surrogate_block_shuffle_summary": {
+    "1.0": {
+      "A40": 0.020899279079795465,
+      "surrogate_A40_ratio": 3.456585569030942,
+      "best_period_ps": 76
+    },
+    "10.0": {
+      "A40": 0.011089630486193984,
+      "surrogate_A40_ratio": 1.8341425346830127,
+      "best_period_ps": 23
+    },
+    "100.0": {
+      "A40": 0.07094998605189533,
+      "surrogate_A40_ratio": 11.734600843098946,
+      "best_period_ps": 43
+    }
+  },
+  "time_split_summary": {
+    "phase40_circular_std": 2.503271795206724,
+    "A40_cv": 0.5248544196880068,
+    "best_period_counts": {
+      "100": 20
+    },
+    "n_segments": 20
+  },
+  "folding_layer_rows": 96,
+  "interpretation": "inconclusive_mixed_pair_residue_and_selection_amplification",
+  "notes": [
+    "This is an offline software diagnostic. It cannot by itself provide final physical attribution without hardware swap/control experiments.",
+    "all_pairs is accumulated as exact streaming statistics; full all-pairs arrays are not stored."
+  ]
+}

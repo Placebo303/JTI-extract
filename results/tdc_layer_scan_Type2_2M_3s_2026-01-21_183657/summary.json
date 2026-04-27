@@ -1,0 +1,1387 @@
+{
+  "ttbin": "D:\\Data\\Raw Data\\2026.1.21\\Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_2026-01-21_183657.1.ttbin",
+  "output_dir": "results\\tdc_layer_scan_Type2_2M_3s_2026-01-21_183657",
+  "parameters": {
+    "ttbin": "D:\\Data\\Raw Data\\2026.1.21\\Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_2026-01-21_183657.1.ttbin",
+    "out": ".\\results\\tdc_layer_scan_Type2_2M_3s_2026-01-21_183657",
+    "ch_a": 1,
+    "ch_b": 5,
+    "window_ps": 200,
+    "period_start_ps": 10,
+    "period_stop_ps": 100,
+    "period_step_ps": 1,
+    "hist_bin_ps": 1,
+    "time_splits": 20,
+    "surrogate_block_ms": "1,10,100",
+    "surrogate_shifts": 10,
+    "seed": 12345,
+    "bin_widths_ps": "20,25,30,35,40,50,60,80",
+    "dims": "4,8,16",
+    "frame_origin_ps": 0.0,
+    "max_events": null,
+    "skip_surrogates": false,
+    "skip_folding": false
+  },
+  "tag_meta": {
+    "ttbin": "D:\\Data\\Raw Data\\2026.1.21\\Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_2026-01-21_183657.1.ttbin",
+    "ttbin_size": 41768912,
+    "ttbin_mtime_ns": 1768991820610226800,
+    "ch_a": 1,
+    "ch_b": 5,
+    "max_events": null,
+    "cache_path": "results\\tdc_layer_scan_Type2_2M_3s_2026-01-21_183657\\tags_cache_ch1_ch5.npz",
+    "n_events_read": 11489075,
+    "n_ch_a": 4449407,
+    "n_ch_b": 6057102,
+    "span_ps": 2999999749626,
+    "span_s": 2.999999749626,
+    "event_type_counts": {
+      "0": 11489075
+    },
+    "channel_counts": {
+      "1": 4449407,
+      "5": 6057102,
+      "1001": 982566
+    },
+    "file_configuration": {
+      "channel number scheme": 2,
+      "configure version": 1,
+      "current time": "2026-01-21 18:36:57 +0800",
+      "devices": [
+        {
+          "FPGA ID": 98467210997048069,
+          "PCB version": "1.1 (1)",
+          "minimum software version": "2.14.0",
+          "model": "Time Tagger X",
+          "serial": "222300114U"
+        }
+      ],
+      "firmware version": "TT-X, FW6, TS 2024-02-21 17:27:46, OK 1.45",
+      "fpga link": {
+        "enabled": false
+      },
+      "hardware buffer size": 67108864,
+      "inputs": [
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            1,
+            -1
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            -126,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            0,
+            0
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            2,
+            -2
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            518,
+            518
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            3,
+            -3
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            653,
+            653
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            4,
+            -4
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            475,
+            475
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            5,
+            -5
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            33,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            703,
+            703
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            6,
+            -6
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1358,
+            1358
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            7,
+            -7
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1198,
+            1198
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            8,
+            -8
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1239,
+            1239
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            9,
+            -9
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            -10373,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1206,
+            1206
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            10,
+            -10
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1090,
+            1090
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            11,
+            -11
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1112,
+            1112
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            12,
+            -12
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            1316,
+            1316
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            13,
+            -13
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            867,
+            867
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            14,
+            -14
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            635,
+            635
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            15,
+            -15
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            777,
+            777
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            16,
+            -16
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            309,
+            309
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            17,
+            -17
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            133,
+            133
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        },
+        {
+          "average rising falling": [
+            false,
+            false
+          ],
+          "channel": [
+            18,
+            -18
+          ],
+          "conditional filter filtered": [
+            false,
+            false
+          ],
+          "conditional filter triggers": [
+            false,
+            false
+          ],
+          "deadtime": [
+            1333,
+            1333
+          ],
+          "delay hardware": [
+            0,
+            0
+          ],
+          "delay software": [
+            0,
+            0
+          ],
+          "event divider": [
+            1,
+            1
+          ],
+          "hardware delay compensation": [
+            223,
+            223
+          ],
+          "high priority channel": [
+            false,
+            false
+          ],
+          "input hysteresis": 20,
+          "input impedance high": false,
+          "input mux": 0,
+          "normalization": [
+            true,
+            true
+          ],
+          "resolution": "Standard",
+          "resolution rms": 2.0,
+          "test signal": false,
+          "trigger level": 0.5,
+          "trigger level range": [
+            -1.024,
+            1.024
+          ]
+        }
+      ],
+      "led bitmask": 0,
+      "led disable": true,
+      "measurements": [
+        {
+          "name": "Coincidences",
+          "params": {
+            "groups": [
+              [
+                1,
+                5
+              ],
+              [
+                1,
+                9
+              ],
+              [
+                1,
+                5,
+                9
+              ]
+            ],
+            "type": 0,
+            "window": 200
+          },
+          "registered channels": [
+            9,
+            1,
+            5
+          ],
+          "virtual channels": [
+            1001,
+            1002,
+            1003
+          ]
+        },
+        {
+          "name": "Countrate",
+          "params": {
+            "channels": [
+              1,
+              5,
+              9
+            ]
+          },
+          "registered channels": [
+            9,
+            1,
+            5
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Counter",
+          "params": {
+            "binwidth": 100000000000,
+            "channels": [
+              1,
+              5,
+              1001
+            ],
+            "n values": 1000
+          },
+          "registered channels": [
+            1,
+            5,
+            1001
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Correlation",
+          "params": {
+            "binwidth": 1,
+            "channel 1": 5,
+            "channel 2": 1,
+            "n bins": 100
+          },
+          "registered channels": [
+            5,
+            1
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "Counter",
+          "params": {
+            "binwidth": 20000000000,
+            "channels": [
+              1,
+              5
+            ],
+            "n values": 3000
+          },
+          "registered channels": [
+            1,
+            5
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "FrequencyCounter",
+          "params": {
+            "channels": [
+              1,
+              5
+            ],
+            "fitting_window": 20000000000,
+            "n_values": 3000,
+            "sampling_interval": 20000000000
+          },
+          "registered channels": [
+            1,
+            5
+          ],
+          "virtual channels": []
+        },
+        {
+          "name": "FileWriter",
+          "params": {
+            "channels": [
+              1,
+              5,
+              1001
+            ],
+            "filename": "D:\\SPDC源测试\\2026.1.21\\Type2_2M_3s_2026-01-21_183657.ttbin"
+          },
+          "registered channels": [
+            1,
+            5,
+            1001
+          ],
+          "virtual channels": []
+        }
+      ],
+      "network": {
+        "client count": 0,
+        "protocol version major": 4,
+        "protocol version minor": 1,
+        "server binding address": "0.0.0.0",
+        "server running": false,
+        "server runs": 0
+      },
+      "registered channels": [
+        1,
+        5,
+        9
+      ],
+      "resolution": "Standard",
+      "serial": "222300114U",
+      "software clock": null,
+      "software version": "2.20.2",
+      "stream block size events": 1048576,
+      "stream block size latency": 20,
+      "test signal divider": 375
+    }
+  },
+  "singles_summary": {
+    "ch_a": {
+      "period40": {
+        "period_ps": 40,
+        "n_pairs": 4449407,
+        "amplitude": 0.00018945534942402237,
+        "phase_rad": -2.2088818158281254,
+        "phase_ps": 25.937821612206093,
+        "chi2_reduced": 0.9933372740486137,
+        "cv": 0.002950730887476454
+      },
+      "best": {
+        "period_ps": 13,
+        "amplitude": 0.0011196666340537256,
+        "phase_rad": 2.4511264766282532,
+        "phase_ps": 5.071415633684499
+      },
+      "hist40": {
+        "total": 4449407,
+        "bins": 40,
+        "mean": 111235.175,
+        "min": 110616,
+        "max": 112049,
+        "cv": 0.002950730887476454,
+        "chi2_reduced": 0.9933372740486137,
+        "peak_to_peak_over_mean": 0.012882615593493695,
+        "max_over_mean": 1.0073162558516224,
+        "min_over_mean": 0.9944336402581287
+      }
+    },
+    "ch_b": {
+      "period40": {
+        "period_ps": 40,
+        "n_pairs": 6057102,
+        "amplitude": 0.00018020153824446457,
+        "phase_rad": 1.1763025827950473,
+        "phase_ps": 7.488574824943811,
+        "chi2_reduced": 0.6918349351275197,
+        "cv": 0.002110576529068541
+      },
+      "best": {
+        "period_ps": 76,
+        "amplitude": 0.0010003291493965154,
+        "phase_rad": 0.33544306570897725,
+        "phase_ps": 4.057444074544722
+      },
+      "hist40": {
+        "total": 6057102,
+        "bins": 40,
+        "mean": 151427.55,
+        "min": 150616,
+        "max": 152098,
+        "cv": 0.002110576529068541,
+        "chi2_reduced": 0.6918349351275197,
+        "peak_to_peak_over_mean": 0.009786858467960421,
+        "max_over_mean": 1.004427529864942,
+        "min_over_mean": 0.9946406713969816
+      }
+    }
+  },
+  "pairing_layer_summary": {
+    "all_pairs": {
+      "layer": "all_pairs",
+      "n_pairs": 982584,
+      "A40": 0.09176255908769497,
+      "phase40_rad": -0.14144490041262925,
+      "phase40_ps": 39.09953379696756,
+      "cv40": 0.12999838454043983,
+      "chi2_40": 425.77581790097366,
+      "best_period_ps": 100,
+      "best_amplitude": 0.5923486633005809,
+      "best_phase_rad": -0.014726736285638805,
+      "best_phase_ps": 99.76561671245298
+    },
+    "nearest": {
+      "layer": "nearest",
+      "n_pairs": 982584,
+      "A40": 0.09176255908769497,
+      "phase40_rad": -0.14144490041262925,
+      "phase40_ps": 39.09953379696756,
+      "cv40": 0.12999838454043983,
+      "chi2_40": 425.77581790097366,
+      "best_period_ps": 100,
+      "best_amplitude": 0.5923486633005809,
+      "best_phase_rad": -0.014726736285638808,
+      "best_phase_ps": 99.76561671245298
+    },
+    "greedy_unique": {
+      "layer": "greedy_unique",
+      "n_pairs": 982584,
+      "A40": 0.09176255908769497,
+      "phase40_rad": -0.14144490041262925,
+      "phase40_ps": 39.09953379696756,
+      "cv40": 0.12999838454043983,
+      "chi2_40": 425.77581790097366,
+      "best_period_ps": 100,
+      "best_amplitude": 0.5923486633005809,
+      "best_phase_rad": -0.014726736285638808,
+      "best_phase_ps": 99.76561671245298
+    }
+  },
+  "surrogate_shift_summary": {
+    "A40_mean": 0.024821353097370234,
+    "A40_std": 0.019107937196592175,
+    "surrogate_A40_ratio": 0.27049543238707136,
+    "best_period_mode": 89,
+    "n_replicates": 10
+  },
+  "surrogate_block_shuffle_summary": {
+    "1.0": {
+      "A40": 0.028659278085728435,
+      "surrogate_A40_ratio": 0.31231995239299665,
+      "best_period_ps": 90
+    },
+    "10.0": {
+      "A40": 0.013587081808666959,
+      "surrogate_A40_ratio": 0.148067817024176,
+      "best_period_ps": 93
+    },
+    "100.0": {
+      "A40": 0.015641850837537156,
+      "surrogate_A40_ratio": 0.17046005465680908,
+      "best_period_ps": 90
+    }
+  },
+  "time_split_summary": {
+    "phase40_circular_std": 0.062037102744046495,
+    "A40_cv": 0.07880149928146513,
+    "best_period_counts": {
+      "100": 20
+    },
+    "n_segments": 20
+  },
+  "folding_layer_rows": 98,
+  "interpretation": "inconclusive_mixed_pair_residue_and_selection_amplification",
+  "notes": [
+    "This is an offline software diagnostic. It cannot by itself provide final physical attribution without hardware swap/control experiments.",
+    "all_pairs is accumulated as exact streaming statistics; full all-pairs arrays are not stored."
+  ]
+}

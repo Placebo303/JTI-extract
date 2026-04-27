@@ -1,0 +1,4 @@
+dataset,time_tagger_serial,channels,coincidence_window_ps,pair_A40,phase_std_rad
+Type0ppln,2413001AYQ,ch1/ch3,1000,0.006863,0.530182
+Type2,222300114U,ch1/ch5,200,0.091763,0.062037
+Type0 nofilter,222300114U,ch1/ch5,1000,0.008108,1.236948

@@ -1,0 +1,35 @@
+{
+  "dimension": 16,
+  "bin_width_ps": 20,
+  "frame_duration_ps": 320.0,
+  "frame_origin_ps": 0.0,
+  "n_pairs": 127500,
+  "single_hit_policy": "strict_single_hit_per_frame",
+  "raw_ch_a_id": 1,
+  "raw_ch_b_id": 5,
+  "logical_ch_a": 0,
+  "logical_ch_b": 1,
+  "input_source": "ttbin",
+  "resolved_ttbin": "D:\\Data\\Raw Data\\2026.1.20\\Type0_nofilter_2M_3s_2026-01-20_193411\\Type0_nofilter_2M_3s_2026-01-20_193411.1.ttbin",
+  "scan_frame_origin_enabled": false,
+  "diagnostics": {
+    "diag_main_sum": 42532.0,
+    "diag_pm1_sum": 57810.0,
+    "total_sum": 127500.0,
+    "diag_main_fraction": 0.3335843137254902,
+    "diag_pm1_fraction": 0.45341176470588235,
+    "diag_contrast": -0.11982745098039216
+  },
+  "pairs_meta": {
+    "n_events_total": 12017195,
+    "n_events_ch0": 6261499,
+    "n_events_ch1": 5601381,
+    "n_frames_common": 127500,
+    "n_pairs": 127500,
+    "frame_origin_ps": 0.0
+  },
+  "timetags": {
+    "acquisition_duration_s": 2.999999433356,
+    "acquisition_duration_source": "derived_from_ttbin_span_ps:D:\\Data\\Raw Data\\2026.1.20\\Type0_nofilter_2M_3s_2026-01-20_193411\\Type0_nofilter_2M_3s_2026-01-20_193411.1.ttbin"
+  }
+}

@@ -1,0 +1,4 @@
+file,rows,cols,total_counts,nonzero_bins,schmidt_number,purity,largest_weight,n_singular_values,singular_value_threshold,normalized_sum,status,message
+results\jti_Type0_nofilter_2M_3s_2026-01-20_193411_dim16\Type0_nofilter_jti_dim16_bw20ps.counts.csv,16,16,127500.0,256.0,3.1684764765588445,0.3156090971159931,0.4871065557852284,16.0,1e-12,1.0,ok,
+results\jti_Type2_2M_3s_2026-01-21_183657\Type2_2M_3s_jti_dim256_bw20ps.counts.csv,256,256,1014153.0,30294.0,60.05835481045909,0.01665047274697993,0.0698836839700179,256.0,1e-12,1.0,ok,
+results\jti_Type2_2M_3s_2026-01-21_183657_dim16\Type2_2M_3s_jti_dim16_bw20ps.counts.csv,16,16,940277.0,256.0,4.51814441321256,0.22132980014442807,0.3524321461821904,16.0,1e-12,1.0,ok,

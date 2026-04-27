@@ -1,0 +1,27 @@
+{
+  "data_dir": "D:\\Data\\Raw Data\\2026.1.21\\Type2_2M_3s_2026-01-21_183657",
+  "out_dir": "results\\jti_Type2_2M_3s_2026-01-21_183657",
+  "input_source": "ttbin",
+  "resolved_ttbin": "D:\\Data\\Raw Data\\2026.1.21\\Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_2026-01-21_183657.1.ttbin",
+  "binwidth_ps": [
+    20
+  ],
+  "dimensions": [
+    256
+  ],
+  "frame_origin_ps": 0.0,
+  "scan_frame_origin_enabled": false,
+  "outputs": [
+    {
+      "dimension": 256,
+      "bin_width_ps": 20,
+      "frame_origin_ps": 0.0,
+      "counts_csv": "results\\jti_Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_jti_dim256_bw20ps.counts.csv",
+      "best_frame_origin_counts_csv": null,
+      "meta": "results\\jti_Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_jti_dim256_bw20ps.meta.json",
+      "npz": "results\\jti_Type2_2M_3s_2026-01-21_183657\\Type2_2M_3s_jti_dim256_bw20ps.npz",
+      "frame_origin_scan_csv": null,
+      "frame_origin_scan_best_json": null
+    }
+  ]
+}

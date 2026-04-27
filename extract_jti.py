@@ -17,9 +17,6 @@ except ModuleNotFoundError:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
 @dataclass(frozen=True)
 class _RawTimetags:
     # Channel mapping convention: Ch is float array with 0/1 for valid events and NaN otherwise.
@@ -197,7 +194,7 @@ def _load_timetags(
     raw_ch_b_id: int,
     logical_ch_a: int,
     logical_ch_b: int,
-) -> tuple[_RawTimetags, Path | None]:
+) -> tuple[_RawTimetags, Path | None, str]:
     npz_candidates = [
         data_dir / "parsed_timebin_data.npz",
         data_dir / "01_raw_parsing" / "parsed_timebin_data.npz",
@@ -225,6 +222,7 @@ def _load_timetags(
                 logical_ch_b=logical_ch_b,
             ),
             ttbin,
+            "ttbin",
         )
 
     if npz_path is None:
@@ -232,7 +230,7 @@ def _load_timetags(
             f"No parsed_timebin_data.npz found under: {data_dir}. "
             "Generate it first or provide --ttbin."
         )
-    return _read_npz_timebins(npz_path), None
+    return _read_npz_timebins(npz_path), None, "parsed_timebin_data.npz"
 
 
 def _unique_frames_single_hit(frames: np.ndarray, data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -251,11 +249,18 @@ def _unique_frames_single_hit(frames: np.ndarray, data: np.ndarray) -> tuple[np.
     return frames[kept_starts], data[kept_starts]
 
 
+def _time_tags_to_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_origin_ps: float) -> np.ndarray:
+    shifted = times_ps.astype(np.float64, copy=False) - float(frame_origin_ps)
+    bins = np.floor(shifted / float(bin_width_ps))
+    return bins.astype(np.int64, copy=False)
+
+
 def _pairs_from_timetags(
     timetags: _RawTimetags,
     *,
     bin_width_ps: int,
     frame_bins: int,
+    frame_origin_ps: float,
     logical_ch_a: int,
     logical_ch_b: int,
 ) -> tuple[np.ndarray, dict]:
@@ -272,12 +277,11 @@ def _pairs_from_timetags(
 
     ch_a = float(int(logical_ch_a))
     ch_b = float(int(logical_ch_b))
-    t0 = TimeTag[Ch == ch_a].astype(np.int64, copy=False)
-    t1 = TimeTag[Ch == ch_b].astype(np.int64, copy=False)
+    t0 = TimeTag[Ch == ch_a]
+    t1 = TimeTag[Ch == ch_b]
 
-    bw = np.int64(int(bin_width_ps))
-    b0 = np.floor_divide(t0, bw)
-    b1 = np.floor_divide(t1, bw)
+    b0 = _time_tags_to_bins(t0, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+    b1 = _time_tags_to_bins(t1, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
     b0.sort()
     b1.sort()
 
@@ -298,6 +302,7 @@ def _pairs_from_timetags(
         "n_events_ch1": int(t1.size),
         "n_frames_common": int(common.size),
         "n_pairs": int(pairs.shape[0]),
+        "frame_origin_ps": float(frame_origin_ps),
     }
     return pairs, meta
 
@@ -313,6 +318,30 @@ def _jti_from_pairs(pairs: np.ndarray, *, n_bins: int) -> np.ndarray:
         return jti
     np.add.at(jti, (a[valid], b[valid]), 1.0)
     return jti
+
+
+def compute_jti_diagnostics(counts: np.ndarray) -> dict[str, float]:
+    total_sum = float(np.sum(counts))
+    diag_main_sum = float(np.trace(counts))
+    diag_pm1_sum = float(np.trace(counts, offset=1) + np.trace(counts, offset=-1))
+
+    if total_sum <= 0.0:
+        diag_main_fraction = 0.0
+        diag_pm1_fraction = 0.0
+        diag_contrast = 0.0
+    else:
+        diag_main_fraction = diag_main_sum / total_sum
+        diag_pm1_fraction = diag_pm1_sum / total_sum
+        diag_contrast = diag_main_fraction - diag_pm1_fraction
+
+    return {
+        "diag_main_sum": diag_main_sum,
+        "diag_pm1_sum": diag_pm1_sum,
+        "total_sum": total_sum,
+        "diag_main_fraction": diag_main_fraction,
+        "diag_pm1_fraction": diag_pm1_fraction,
+        "diag_contrast": diag_contrast,
+    }
 
 
 def _accidentals_subtract(counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -424,31 +453,154 @@ def _save_csv_matrix(path: Path, mat: np.ndarray) -> None:
             w.writerow([i] + [float(x) for x in mat[i, :].tolist()])
 
 
-def _plot_png(path: Path, mat: np.ndarray, *, bin_width_ps: int, title: str) -> None:
+def _save_frame_origin_scan_csv(path: Path, rows: list[dict]) -> None:
+    fieldnames = [
+        "frame_origin_ps",
+        "dimension",
+        "bin_width_ps",
+        "n_pairs",
+        "total_sum",
+        "diag_main_sum",
+        "diag_pm1_sum",
+        "diag_main_fraction",
+        "diag_pm1_fraction",
+        "diag_contrast",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row[k] for k in fieldnames})
+
+
+def _plot_png(path: Path, mat: np.ndarray, *, title: str) -> None:
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(f"matplotlib is required for --plot: {exc}") from exc
 
     n = int(mat.shape[0])
-    dt_fs = float(bin_width_ps) * 1000.0
-    centers_fs = (np.arange(n) - (n - 1) / 2.0) * dt_fs
 
     fig, ax = plt.subplots(figsize=(6.0, 5.0), dpi=160)
     im = ax.imshow(
         mat,
         origin="lower",
         cmap="viridis",
-        extent=[centers_fs[0], centers_fs[-1], centers_fs[0], centers_fs[-1]],
-        aspect="auto",
+        extent=[-0.5, n - 0.5, -0.5, n - 0.5],
+        aspect="equal",
     )
     ax.set_title(title)
-    ax.set_xlabel("Signal delay (fs)")
-    ax.set_ylabel("Idler delay (fs)")
-    fig.colorbar(im, ax=ax, label="Intensity (a.u.)" if np.max(mat) <= 1.0 else "Counts")
+    ax.set_xlabel("Signal time-bin index")
+    ax.set_ylabel("Idler time-bin index")
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    fig.colorbar(im, ax=ax, label="Counts")
     fig.tight_layout()
     fig.savefig(str(path))
     plt.close(fig)
+
+
+def _iter_frame_origins(start_ps: float, stop_ps: float, step_ps: float) -> list[float]:
+    if step_ps <= 0:
+        raise ValueError("frame_origin_step_ps must be positive")
+    if stop_ps < start_ps:
+        raise ValueError("frame_origin_stop_ps must be >= frame_origin_start_ps")
+
+    values: list[float] = []
+    current = float(start_ps)
+    tolerance = abs(step_ps) * 1e-9 + 1e-12
+    while current <= stop_ps + tolerance:
+        values.append(float(round(current, 12)))
+        current += step_ps
+    return values
+
+
+def _select_best_frame_origin(rows: list[dict]) -> dict:
+    if not rows:
+        raise ValueError("frame-origin scan rows must not be empty")
+
+    def _key(row: dict) -> tuple[float, float, float, float]:
+        return (
+            float(row["diag_main_fraction"]),
+            -float(row["diag_pm1_fraction"]),
+            float(row["diag_contrast"]),
+            -float(row["frame_origin_ps"]),
+        )
+
+    best = max(rows, key=_key)
+    return {
+        "best_frame_origin_ps": float(best["frame_origin_ps"]),
+        "selection_rule": (
+            "maximize diag_main_fraction; then minimize diag_pm1_fraction; "
+            "then maximize diag_contrast; then choose the smallest frame_origin_ps"
+        ),
+        "dimension": int(best["dimension"]),
+        "bin_width_ps": int(best["bin_width_ps"]),
+        "best_diag_main_fraction": float(best["diag_main_fraction"]),
+        "best_diag_pm1_fraction": float(best["diag_pm1_fraction"]),
+        "best_diag_contrast": float(best["diag_contrast"]),
+    }
+
+
+def _counts_for_frame_origin(
+    timetags: _RawTimetags,
+    *,
+    bin_width_ps: int,
+    frame_bins: int,
+    frame_origin_ps: float,
+    logical_ch_a: int,
+    logical_ch_b: int,
+) -> tuple[np.ndarray, dict, dict[str, float]]:
+    pairs, pairs_meta = _pairs_from_timetags(
+        timetags,
+        bin_width_ps=int(bin_width_ps),
+        frame_bins=int(frame_bins),
+        frame_origin_ps=float(frame_origin_ps),
+        logical_ch_a=logical_ch_a,
+        logical_ch_b=logical_ch_b,
+    )
+    counts = _jti_from_pairs(pairs, n_bins=int(frame_bins))
+    diagnostics = compute_jti_diagnostics(counts)
+    return counts, pairs_meta, diagnostics
+
+
+def _optional_analysis_outputs(
+    counts: np.ndarray,
+    *,
+    background_subtract: bool,
+    peak_align: bool,
+    align_mode: str,
+    normalize: str,
+) -> tuple[dict, dict]:
+    analysis_options = {
+        "background_subtract": bool(background_subtract),
+        "peak_align": bool(peak_align),
+        "align_mode": str(align_mode),
+        "normalize": str(normalize),
+    }
+    if not background_subtract and not peak_align and str(normalize).lower() in {"none", ""}:
+        return analysis_options, {}
+
+    accidentals = np.zeros_like(counts)
+    corrected = counts.copy()
+    if background_subtract:
+        corrected, accidentals = _accidentals_subtract(counts)
+
+    peak = None
+    shift = (0, 0)
+    aligned = corrected
+    if peak_align:
+        aligned, peak, shift = _peak_align_to_center(corrected, mode=align_mode)
+
+    normalized = _normalize(aligned, normalize)
+    return analysis_options, {
+        "jti_accidentals": accidentals.astype(np.float64),
+        "jti_corrected": corrected.astype(np.float64),
+        "jti_aligned": aligned.astype(np.float64),
+        "jti_normalized": normalized.astype(np.float64),
+        "peak_index_before_align": peak,
+        "shift_bins": {"signal": int(shift[0]), "idler": int(shift[1])},
+    }
 
 
 def run_extract(
@@ -457,6 +609,11 @@ def run_extract(
     ttbin: Path | None,
     binwidth_ps: Iterable[int],
     dimensions: Iterable[int],
+    frame_origin_ps: float,
+    scan_frame_origin: bool,
+    frame_origin_start_ps: float,
+    frame_origin_stop_ps: float | None,
+    frame_origin_step_ps: float,
     out_dir: Path,
     quiet: bool,
     max_events: int | None,
@@ -476,7 +633,7 @@ def run_extract(
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    timetags, resolved_ttbin = _load_timetags(
+    timetags, resolved_ttbin, input_source = _load_timetags(
         data_dir=data_dir,
         ttbin=ttbin,
         prefer_ttbin=prefer_ttbin,
@@ -487,101 +644,182 @@ def run_extract(
         logical_ch_b=logical_ch_b,
     )
 
+    binwidth_values = [int(x) for x in binwidth_ps]
+    dimension_values = [int(x) for x in dimensions]
+    if scan_frame_origin and (len(binwidth_values) != 1 or len(dimension_values) != 1):
+        raise SystemExit(
+            "--scan-frame-origin only supports a single --binwidth-ps value and a single --dimensions value."
+        )
+    if scan_frame_origin and frame_origin_step_ps <= 0:
+        raise SystemExit("--frame-origin-step-ps must be positive when --scan-frame-origin is enabled.")
+
     outputs: list[dict] = []
-    for bw in binwidth_ps:
-        for dim in dimensions:
+    for bw in binwidth_values:
+        for dim in dimension_values:
             frame_bins = int(dim)
-            pairs, pairs_meta = _pairs_from_timetags(
+            stem = f"{prefix}jti_dim{int(dim)}_bw{int(bw)}ps"
+            scan_csv_path = None
+            scan_best_path = None
+            best_frame_origin_payload = None
+            best_counts_csv_path = None
+
+            if scan_frame_origin:
+                stop_ps = float(frame_origin_stop_ps if frame_origin_stop_ps is not None else bw)
+                scan_rows: list[dict] = []
+                for t0 in _iter_frame_origins(float(frame_origin_start_ps), stop_ps, float(frame_origin_step_ps)):
+                    scan_counts, scan_pairs_meta, scan_diag = _counts_for_frame_origin(
+                        timetags,
+                        bin_width_ps=int(bw),
+                        frame_bins=frame_bins,
+                        frame_origin_ps=float(t0),
+                        logical_ch_a=logical_ch_a,
+                        logical_ch_b=logical_ch_b,
+                    )
+                    scan_rows.append(
+                        {
+                            "frame_origin_ps": float(t0),
+                            "dimension": int(dim),
+                            "bin_width_ps": int(bw),
+                            "n_pairs": int(scan_pairs_meta["n_pairs"]),
+                            **scan_diag,
+                        }
+                    )
+
+                scan_csv_path = out_dir / f"{stem}.frame_origin_scan.csv"
+                _save_frame_origin_scan_csv(scan_csv_path, scan_rows)
+                best_frame_origin_payload = _select_best_frame_origin(scan_rows)
+                scan_best_path = out_dir / f"{stem}.frame_origin_scan_best.json"
+                scan_best_path.write_text(
+                    json.dumps(best_frame_origin_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+            counts, pairs_meta, diagnostics = _counts_for_frame_origin(
                 timetags,
                 bin_width_ps=int(bw),
                 frame_bins=frame_bins,
+                frame_origin_ps=float(frame_origin_ps),
                 logical_ch_a=logical_ch_a,
                 logical_ch_b=logical_ch_b,
             )
-            counts = _jti_from_pairs(pairs, n_bins=frame_bins)
+            analysis_options, analysis_arrays = _optional_analysis_outputs(
+                counts,
+                background_subtract=background_subtract,
+                peak_align=peak_align,
+                align_mode=align_mode,
+                normalize=normalize,
+            )
 
-            acc = np.zeros_like(counts)
-            counts_corr = counts.copy()
-            if background_subtract:
-                counts_corr, acc = _accidentals_subtract(counts)
-
-            peak = None
-            shift = (0, 0)
-            aligned = counts_corr
-            if peak_align:
-                aligned, peak, shift = _peak_align_to_center(counts_corr, mode=align_mode)
-
-            normalized = _normalize(aligned, normalize)
-
-            stem = f"{prefix}jti_dim{int(dim)}_bw{int(bw)}ps"
             meta_path = out_dir / f"{stem}.meta.json"
             npz_path = None
             if save_npz:
+                npz_payload: dict[str, object] = {
+                    "jti_counts": counts.astype(np.float64),
+                    "dimension": np.int64(int(dim)),
+                    "bin_width_ps": np.int64(int(bw)),
+                    "frame_origin_ps": np.float64(float(frame_origin_ps)),
+                }
+                for key, value in analysis_arrays.items():
+                    if isinstance(value, np.ndarray):
+                        npz_payload[key] = value
                 npz_path = out_dir / f"{stem}.npz"
-                np.savez_compressed(
-                    str(npz_path),
-                    jti_counts=counts.astype(np.float64),
-                    jti_accidentals=acc.astype(np.float64),
-                    jti_corrected=counts_corr.astype(np.float64),
-                    jti_aligned=aligned.astype(np.float64),
-                    jti_normalized=normalized.astype(np.float64),
-                    dimension=np.int64(int(dim)),
-                    bin_width_ps=np.int64(int(bw)),
-                )
+                np.savez_compressed(str(npz_path), **npz_payload)
 
             meta = {
                 "dimension": int(dim),
                 "bin_width_ps": int(bw),
                 "frame_duration_ps": float(int(dim) * int(bw)),
-                "normalize": normalize,
-                "background_subtract": bool(background_subtract),
-                "peak_align": bool(peak_align),
-                "align_mode": str(align_mode),
-                "peak_index_before_align": peak,
-                "shift_bins": {"signal": int(shift[0]), "idler": int(shift[1])},
-                "roll_shift_bins": {"signal": int(shift[0]), "idler": int(shift[1])},
-                "n_pairs": int(pairs.shape[0]),
+                "frame_origin_ps": float(frame_origin_ps),
+                "n_pairs": int(pairs_meta["n_pairs"]),
+                "single_hit_policy": "strict_single_hit_per_frame",
+                "raw_ch_a_id": int(raw_ch_a_id),
+                "raw_ch_b_id": int(raw_ch_b_id),
+                "logical_ch_a": int(logical_ch_a),
+                "logical_ch_b": int(logical_ch_b),
+                "input_source": str(input_source),
+                "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
+                "scan_frame_origin_enabled": bool(scan_frame_origin),
+                "diagnostics": diagnostics,
+                "pairs_meta": pairs_meta,
                 "timetags": {
                     "acquisition_duration_s": timetags.acquisition_duration_s,
                     "acquisition_duration_source": timetags.acquisition_duration_source,
-                    "raw_ch_a_id": int(raw_ch_a_id),
-                    "raw_ch_b_id": int(raw_ch_b_id),
-                    "logical_ch_a": int(logical_ch_a),
-                    "logical_ch_b": int(logical_ch_b),
-                    "ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
                 },
-                "pairs_meta": pairs_meta,
             }
+            if scan_csv_path is not None and scan_best_path is not None:
+                meta["frame_origin_scan_csv"] = str(scan_csv_path)
+                meta["frame_origin_scan_best_json"] = str(scan_best_path)
+            if best_frame_origin_payload is not None:
+                best_counts, best_pairs_meta, best_diagnostics = _counts_for_frame_origin(
+                    timetags,
+                    bin_width_ps=int(bw),
+                    frame_bins=frame_bins,
+                    frame_origin_ps=float(best_frame_origin_payload["best_frame_origin_ps"]),
+                    logical_ch_a=logical_ch_a,
+                    logical_ch_b=logical_ch_b,
+                )
+                best_counts_csv_path = out_dir / f"{stem}.best_frame_origin.counts.csv"
+                if save_csv:
+                    _save_csv_matrix(best_counts_csv_path, best_counts)
+                meta["best_frame_origin_result"] = {
+                    "frame_origin_ps": float(best_frame_origin_payload["best_frame_origin_ps"]),
+                    "counts_csv": str(best_counts_csv_path) if save_csv else None,
+                    "n_pairs": int(best_pairs_meta["n_pairs"]),
+                    "diagnostics": best_diagnostics,
+                }
+            if analysis_options["background_subtract"] or analysis_options["peak_align"] or analysis_options["normalize"].lower() != "none":
+                optional_postprocess = dict(analysis_options)
+                if "peak_index_before_align" in analysis_arrays:
+                    optional_postprocess["peak_index_before_align"] = analysis_arrays["peak_index_before_align"]
+                if "shift_bins" in analysis_arrays:
+                    optional_postprocess["shift_bins"] = analysis_arrays["shift_bins"]
+                meta["optional_postprocess"] = optional_postprocess
             meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
             if save_csv:
                 _save_csv_matrix(out_dir / f"{stem}.counts.csv", counts)
-                _save_csv_matrix(out_dir / f"{stem}.normalized.csv", normalized)
-
             if plot:
-                _plot_png(out_dir / f"{stem}.png", normalized, bin_width_ps=int(bw), title=f"JTI (dim={dim}, bw={bw}ps)")
+                _plot_png(
+                    out_dir / f"{stem}.png",
+                    counts,
+                    title=f"Discrete Joint Time-Bin Counts (dim={dim}, bw={bw}ps, t0={frame_origin_ps}ps)",
+                )
 
             outputs.append(
                 {
                     "dimension": int(dim),
                     "bin_width_ps": int(bw),
-                    "npz": str(npz_path) if npz_path is not None else None,
+                    "frame_origin_ps": float(frame_origin_ps),
+                    "counts_csv": str(out_dir / f"{stem}.counts.csv") if save_csv else None,
+                    "best_frame_origin_counts_csv": str(best_counts_csv_path) if best_counts_csv_path is not None and save_csv else None,
                     "meta": str(meta_path),
+                    "npz": str(npz_path) if npz_path is not None else None,
+                    "frame_origin_scan_csv": str(scan_csv_path) if scan_csv_path is not None else None,
+                    "frame_origin_scan_best_json": str(scan_best_path) if scan_best_path is not None else None,
                 }
             )
             if not quiet:
-                if npz_path is not None:
-                    print(str(npz_path))
                 if save_csv:
                     print(str(out_dir / f"{stem}.counts.csv"))
-                    print(str(out_dir / f"{stem}.normalized.csv"))
+                    if best_counts_csv_path is not None:
+                        print(str(best_counts_csv_path))
+                print(str(meta_path))
+                if npz_path is not None:
+                    print(str(npz_path))
+                if scan_csv_path is not None:
+                    print(str(scan_csv_path))
+                if scan_best_path is not None:
+                    print(str(scan_best_path))
 
     summary = {
         "data_dir": str(data_dir),
         "out_dir": str(out_dir),
+        "input_source": str(input_source),
         "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
-        "binwidth_ps": list(int(x) for x in binwidth_ps),
-        "dimensions": list(int(x) for x in dimensions),
+        "binwidth_ps": binwidth_values,
+        "dimensions": dimension_values,
+        "frame_origin_ps": float(frame_origin_ps),
+        "scan_frame_origin_enabled": bool(scan_frame_origin),
         "outputs": outputs,
     }
     summary_path = out_dir / f"{prefix}jti_summary.json"
@@ -591,17 +829,83 @@ def run_extract(
     return summary
 
 
+def _self_test_counts_and_diagnostics() -> None:
+    counts = _jti_from_pairs(np.asarray([(0, 0), (1, 1), (2, 2)], dtype=np.int64), n_bins=4)
+    assert float(np.trace(counts)) == 3.0, "main diagonal sum should be 3"
+
+    counts_pm1 = _jti_from_pairs(np.asarray([(0, 1), (1, 2), (2, 3)], dtype=np.int64), n_bins=4)
+    diag = compute_jti_diagnostics(counts_pm1)
+    assert diag["diag_pm1_sum"] == 3.0, "pm1 diagonal sum should be 3"
+
+
+def _self_test_frame_origin_scan() -> None:
+    timetags = _RawTimetags(
+        Ch=np.asarray([0.0, 1.0, 0.0, 1.0], dtype=float),
+        TimeTag=np.asarray([10, 20, 110, 120], dtype=np.int64),
+        overflow_types=None,
+        missed_events=None,
+        acquisition_duration_s=None,
+        acquisition_duration_source=None,
+    )
+    out_dir = Path(__file__).resolve().parent / ".selftest_tmp"
+    out_dir.mkdir(exist_ok=True)
+    try:
+        rows: list[dict] = []
+        for t0 in _iter_frame_origins(0.0, 50.0, 25.0):
+            pairs, pairs_meta = _pairs_from_timetags(
+                timetags,
+                bin_width_ps=50,
+                frame_bins=4,
+                frame_origin_ps=t0,
+                logical_ch_a=0,
+                logical_ch_b=1,
+            )
+            rows.append(
+                {
+                    "frame_origin_ps": t0,
+                    "dimension": 4,
+                    "bin_width_ps": 50,
+                    "n_pairs": int(pairs_meta["n_pairs"]),
+                    **compute_jti_diagnostics(_jti_from_pairs(pairs, n_bins=4)),
+                }
+            )
+
+        csv_path = out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan.csv"
+        best_path = out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan_best.json"
+        _save_frame_origin_scan_csv(csv_path, rows)
+        best_path.write_text(json.dumps(_select_best_frame_origin(rows), ensure_ascii=False, indent=2), encoding="utf-8")
+        assert csv_path.exists(), "scan CSV should be created"
+        assert best_path.exists(), "scan best JSON should be created"
+        assert "frame_origin_ps" in csv_path.read_text(encoding="utf-8")
+        assert "best_frame_origin_ps" in json.loads(best_path.read_text(encoding="utf-8"))
+    finally:
+        for path in [out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan.csv", out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan_best.json"]:
+            if path.exists():
+                path.unlink()
+        if out_dir.exists():
+            out_dir.rmdir()
+
+
+def _run_self_tests() -> None:
+    _self_test_counts_and_diagnostics()
+    _self_test_frame_origin_scan()
+    print("self-test passed")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Extract delay-delay JTI (Joint Temporal Intensity) matrices from TimeTagger .ttbin ToA timetags.",
+        description=(
+            "Extract a discrete joint time-bin coincidence matrix in the arrival-time basis "
+            "from pre-aligned timetag data."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Example:\n"
-            "  python extract_jti.py --data \"E:\\\\Data\\\\YourDataset\" --ttbin \"E:\\\\Data\\\\file.ttbin\" "
-            "--binwidth-ps 100 --dimensions 16 --out \"E:\\\\Data\\\\YourDataset\\\\jti_out\" --plot\n"
+            "  python extract_jti.py --data \"E:\\\\Data\\\\YourDataset\" --binwidth-ps 200 "
+            "--dimensions 32 --frame-origin-ps 0 --out \"E:\\\\Data\\\\YourDataset\\\\jti_out\"\n"
         ),
     )
-    ap.add_argument("--data", required=True, help="Dataset directory (also used to search parsed_timebin_data.npz).")
+    ap.add_argument("--data", required=False, help="Dataset directory (also used to search parsed_timebin_data.npz).")
     ap.add_argument("--ttbin", default=None, help="Optional: explicit *.ttbin file path (Windows or WSL).")
     ap.add_argument("--prefer-ttbin", action="store_true", help="Prefer reading *.ttbin even if parsed_timebin_data.npz exists.")
     ap.add_argument("--max-events", type=int, default=None, help="Optional: stop reading after this many events (debug/perf).")
@@ -611,29 +915,24 @@ def main() -> int:
     ap.add_argument("--ch-b", type=int, default=1, help="Logical channel value for idler/B in parsed data (default: 1).")
     ap.add_argument("--binwidth-ps", default="100", help="Comma-separated bin widths in ps.")
     ap.add_argument("--dimensions", default="16", help="Comma-separated dimensions (also used as frame bins per axis).")
+    ap.add_argument("--frame-origin-ps", type=float, default=0.0, help="Common time origin t0 in ps for discrete time-bin mapping.")
+    ap.add_argument("--scan-frame-origin", action="store_true", help="Scan frame-origin candidates and export diagonal diagnostics.")
+    ap.add_argument("--frame-origin-start-ps", type=float, default=0.0, help="Start value for frame-origin scan in ps.")
+    ap.add_argument("--frame-origin-stop-ps", type=float, default=None, help="Stop value for frame-origin scan in ps. Defaults to the selected bin width.")
+    ap.add_argument("--frame-origin-step-ps", type=float, default=5.0, help="Step size for frame-origin scan in ps.")
     ap.add_argument("--out", default=None, help="Output directory (default: the ttbin folder if available; otherwise --data).")
-    ap.add_argument("--no-csv", action="store_true", help="Disable CSV export (CSV is the default output format).")
-    ap.add_argument("--npz", action="store_true", help="Also save NPZ (arrays) for each output.")
-    ap.add_argument("--plot", action="store_true", help="Also save a normalized heatmap PNG.")
-    ap.add_argument("--no-bg", action="store_true", help="Disable accidentals background subtraction.")
-    ap.add_argument("--no-align", action="store_true", help="Disable peak alignment to (0,0) (center bin).")
-    ap.add_argument(
-        "--align-mode",
-        default="roll",
-        choices=["roll", "pad", "tile"],
-        help=(
-            "Peak alignment mode when alignment is enabled: "
-            "roll=wrap-around shift, pad=zero-padded shift, tile=tiled-window shift (no wrap corners, no loss)."
-        ),
-    )
-    ap.add_argument(
-        "--normalize",
-        default="sum",
-        choices=["none", "sum", "max", "diagmax"],
-        help="Normalization mode for output/plot (diagmax: scale so max(diagonal)=1).",
-    )
+    ap.add_argument("--no-csv", action="store_true", help="Disable CSV export (CSV counts are the default output format).")
+    ap.add_argument("--npz", action="store_true", help="Also save NPZ with jti_counts and optional analysis arrays.")
+    ap.add_argument("--plot", action="store_true", help="Also save a heatmap PNG derived from raw counts.")
+    ap.add_argument("--background-subtract", action="store_true", help="Optional analysis mode for NPZ/meta only. Does not change counts.csv.")
+    ap.add_argument("--peak-align", action="store_true", help="Optional analysis mode for NPZ/meta only. Does not change counts.csv.")
+    ap.add_argument("--no-bg", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--no-align", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--align-mode", default="roll", choices=["roll", "pad", "tile"], help="Optional analysis mode used with --peak-align.")
+    ap.add_argument("--normalize", default="none", choices=["none", "sum", "max", "diagmax"], help="Optional analysis normalization for NPZ/meta only.")
     ap.add_argument("--prefix", default="", help="Prefix for output filenames, e.g. 'run1_'.")
     ap.add_argument("--quiet", action="store_true", help="Suppress console output.")
+    ap.add_argument("--self-test", action="store_true", help="Run built-in toy validation and exit.")
     args = ap.parse_args()
 
     if np is None:  # pragma: no cover
@@ -641,6 +940,11 @@ def main() -> int:
             f"numpy is missing in this Python environment ({sys.executable}). "
             "Run with a Python that has numpy installed."
         )
+    if args.self_test:
+        _run_self_tests()
+        return 0
+    if not args.data:
+        raise SystemExit("--data is required unless --self-test is used.")
 
     data_dir = _normalize_path(args.data)
     if not data_dir.exists():
@@ -649,28 +953,28 @@ def main() -> int:
     ttbin = _normalize_path(args.ttbin) if args.ttbin else None
     out_dir = Path(args.out) if args.out else None
     if out_dir is None:
-        # Default: place outputs next to the source ttbin if one is explicitly provided; otherwise in the dataset dir.
         out_dir = (ttbin.parent if ttbin is not None else data_dir)
 
-    # Common pitfall: users confuse logical channel labels (--ch-a/--ch-b) with TimeTagger raw channel ids.
-    # When reading *.ttbin, raw ids are selected with --raw-ch-*-id; logical labels are arbitrary and only used
-    # after mapping. Warn for the most frequent mistake pattern.
-    if (ttbin is not None or bool(args.prefer_ttbin)) and (
-        int(args.ch_a) not in (0, 1) or int(args.ch_b) not in (0, 1)
-    ):
+    if (ttbin is not None or bool(args.prefer_ttbin)) and (int(args.ch_a) not in (0, 1) or int(args.ch_b) not in (0, 1)):
         print(
             "Warning: when reading *.ttbin, use --raw-ch-a-id/--raw-ch-b-id to select hardware channels; "
             "--ch-a/--ch-b are logical labels after mapping (usually 0 and 1).",
             file=sys.stderr,
         )
-    binwidth_ps = _parse_int_list(args.binwidth_ps)
-    dimensions = _parse_int_list(args.dimensions)
+
+    background_subtract = bool(args.background_subtract) and not bool(args.no_bg)
+    peak_align = bool(args.peak_align) and not bool(args.no_align)
 
     run_extract(
         data_dir=data_dir,
         ttbin=ttbin,
-        binwidth_ps=binwidth_ps,
-        dimensions=dimensions,
+        binwidth_ps=_parse_int_list(args.binwidth_ps),
+        dimensions=_parse_int_list(args.dimensions),
+        frame_origin_ps=float(args.frame_origin_ps),
+        scan_frame_origin=bool(args.scan_frame_origin),
+        frame_origin_start_ps=float(args.frame_origin_start_ps),
+        frame_origin_stop_ps=args.frame_origin_stop_ps,
+        frame_origin_step_ps=float(args.frame_origin_step_ps),
         out_dir=out_dir,
         quiet=bool(args.quiet),
         max_events=args.max_events,
@@ -679,8 +983,8 @@ def main() -> int:
         logical_ch_a=int(args.ch_a),
         logical_ch_b=int(args.ch_b),
         prefer_ttbin=bool(args.prefer_ttbin),
-        background_subtract=not bool(args.no_bg),
-        peak_align=not bool(args.no_align),
+        background_subtract=background_subtract,
+        peak_align=peak_align,
         align_mode=str(args.align_mode),
         normalize=str(args.normalize),
         save_csv=not bool(args.no_csv),
