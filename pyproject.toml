@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jti-extract"
+version = "0.1.0"
+description = "Reproducible JTI extraction, TDC residue diagnostics, and Schmidt-number analysis tools."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "JTI extraction contributors" }]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+plotting = ["matplotlib"]
+dev = ["pytest"]
+# Swabian TimeTagger Python bindings are distributed with Swabian software,
+# not reliably installable from PyPI. See docs/TROUBLESHOOTING.md.
+
+[project.scripts]
+jti-extract = "jti_extract.cli.extract:main"
+jti-schmidt = "jti_extract.cli.schmidt:main"
+jti-tdc-residue = "jti_extract.cli.tdc_residue:main"
+jti-tdc-layer-scan = "jti_extract.cli.tdc_layer_scan:main"
+jti-ultra-sweep = "jti_extract.ultra.cli_ultra:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-p", "no:cacheprovider"]
+norecursedirs = [".git", ".pytest_cache", ".pytest_tmp", "_tmp*", "_work", "__pycache__"]

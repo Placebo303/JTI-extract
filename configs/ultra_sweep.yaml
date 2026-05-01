@@ -1,0 +1,65 @@
+# Ultra-high-dimensional fixed-lattice G2-like JTI sweep configuration template.
+#
+# CLI arguments remain the source of truth. This file documents the expected
+# config schema for future jti-ultra-sweep runs.
+#
+# WARNING: This file is a documentation template only — it is NOT directly
+# consumed by the CLI. Do not pass this file to jti-ultra-sweep as --config.
+#
+# Implemented keys (consumed by CLI):
+#   n_bins, bin_width_ps, frame_origin_ps,
+#   coincidence_window_ps, edge_guard_ps,
+#   coarse_n_bins, truncated_rank,
+#   bootstrap_n, bootstrap_block_ps, bootstrap_seed,
+#   out, prefix, no_csv, no_json, quiet, dry_run, self_test,
+#   ttbin, t_a, t_b, ch_a, ch_b, max_events,
+#   origin_sensitivity, edge_guard_sensitivity
+#
+# Planned / not yet implemented (documented for future reference only):
+#   overwrite flag, data key, NPZ data dir
+
+# --- Data source ---
+# One of:
+#   data: path/to/dataset           # NPZ-format data directory
+#   ttbin: path/to/file.ttbin       # TimeTagger binary file
+#   t_a: path/to/t_a.npy            # Pre-sorted channel A timestamps (npy)
+#   t_b: path/to/t_b.npy            # Pre-sorted channel B timestamps (npy)
+
+# --- Frame lattice ---
+n_bins: 1024                   # Number of bins (N) per frame dimension
+bin_width_ps: 100              # Bin width in picoseconds
+frame_origin_ps: 0             # Global frame origin (ps)
+
+# --- All-candidate coincidence ---
+coincidence_window_ps: 200     # Fixed physical coincidence window (ps)
+
+# --- Edge guard ---
+edge_guard_ps: 200             # max(coincidence_window_ps, 3 * jitter_ps)
+
+# --- Coarse JTI ---
+coarse_n_bins: 64              # Coarse JTI dimension (0 = skip coarse JTI)
+
+# --- Diagnostics ---
+strict_retention: true         # Report strict single-hit retention metrics
+method_comparison: true        # Report nearest/greedy/all-candidate comparison
+origin_sensitivity:            # List of origins for sensitivity check
+  - 0
+edge_guard_sensitivity:        # List of edge guards for sensitivity check
+  - 200
+
+# --- Effective-mode estimation ---
+exact_svd: true                # Run exact SVD on coarse JTI
+truncated_rank: 0              # Truncated rank (0 = skip truncated)
+bootstrap:                     # Block bootstrap settings
+  enabled: false
+  n_resamples: 100
+  block_size_ps: 2000          # Block size in ps (None = default coincidence_window_ps * 10)
+
+# --- Output ---
+output_dir: ""                 # Output directory (empty = auto-generate timestamped dir)
+prefix: ""                     # Output filename prefix
+overwrite: false               # Overwrite existing output (default: refuse)
+
+# --- Execution ---
+quiet: false                   # Suppress progress output
+dry_run: false                 # Validate config without processing data
