@@ -1,0 +1,5 @@
+# Fill in local paths before running.
+ttbin: <path/to/type2.ttbin>
+ch_a: 1
+ch_b: 5
+window_ps: 200

@@ -1,0 +1,6 @@
+# Example smoke configuration. CLI arguments remain the source of truth.
+data: tests/fixtures
+binwidth_ps: 50
+dimensions: 4
+frame_origin_ps: 0
+out: results/smoke
