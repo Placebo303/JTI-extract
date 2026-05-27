@@ -11,7 +11,7 @@
 
 - `src/jti_extract/` - installable Python package root. [repo-observed]
 - `src/jti_extract/cli/` - CLI implementations:
-  - `extract.py` - JTI extraction CLI and `run_extract` implementation. [repo-observed]
+  - `extract.py` - JTI extraction CLI with CV/DV/SVD unwrapped output. [updated 2026-05-27]
   - `schmidt.py` - Schmidt-number analysis CLI. [repo-observed]
   - `tdc_layer_scan.py` - offline TimeTagger layer/residue diagnostics. [repo-observed]
   - `tdc_residue.py` - TimeTagger fine-time residue diagnostics. [repo-observed]
@@ -30,7 +30,7 @@
 - `docs/` - documentation:
   - `CLI.md`, `DATA_CONTRACT.md`, `DIAGNOSTICS_40PS.md`, `OUTPUTS.md`, `SCHMIDT_ANALYSIS.md`, `TROUBLESHOOTING.md`, `TYPE0PPLN_PPLUS_AUTO_DIM_REPORT.md`, `WORKFLOWS.md`, `index.md`. [repo-observed]
 - `tests/` - pytest tests and fixtures:
-  - `test_binning.py`, `test_cli_smoke.py`, `test_io_contract.py`, `test_pairing.py`, `test_schmidt.py`. [repo-observed]
+  - `test_binning.py`, `test_cli_smoke.py`, `test_io_contract.py`, `test_pairing.py`, `test_schmidt.py`, `test_cv_extract.py`. [updated 2026-05-27]
 - `results/` - generated results and previously generated artifacts. Treat as output area, not source. [repo-observed]
 - `pyproject.toml` - package metadata, dependencies, console scripts, pytest configuration. [repo-observed]
 

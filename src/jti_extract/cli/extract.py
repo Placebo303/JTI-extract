@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""
+JTI extraction with CV/DV/SVD unwrapped output.
+
+CV (continuous variable): fine-bin 2D histogram showing modulo-time distribution.
+DV (divided variable): discrete JTI matrix for physical analysis.
+SVD (unwrapped edge-guarded): non-cyclic finite-window JTI for Schmidt/SVD analysis.
+
+Key features:
+- Window bound to binwidth: window_ps = k * binwidth_ps
+- No single-hit-per-frame filter (all_pairs_window mode)
+- Explicit accidentals evaluation via B-channel delay
+- Revised frame_origin scoring: score = diag_band_fraction - accidental_fraction
+- Integer arithmetic throughout to avoid float64 precision loss on large timestamps
+- Unwrapped edge-guarded JTI for SVD/Schmidt analysis (no wrap-around)
+"""
 from __future__ import annotations
 
 import argparse
@@ -17,9 +32,12 @@ except ModuleNotFoundError:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
 
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
 class _RawTimetags:
-    # Channel mapping convention: Ch is float array with 0/1 for valid events and NaN otherwise.
     Ch: np.ndarray
     TimeTag: np.ndarray
     overflow_types: np.ndarray | None
@@ -27,6 +45,38 @@ class _RawTimetags:
     acquisition_duration_s: float | None
     acquisition_duration_source: str | None
 
+
+@dataclass(frozen=True)
+class _CoincidenceResult:
+    """Result of coincidence pairing."""
+    t_a_paired: np.ndarray  # ps timestamps of A events in pairs
+    t_b_paired: np.ndarray  # ps timestamps of B events in pairs
+    n_events_a: int
+    n_events_b: int
+    window_ps: int
+    pairing_mode: str
+    allows_event_reuse: bool
+
+
+@dataclass(frozen=True)
+class _ScanResult:
+    """Result of frame_origin scan for one k value."""
+    k: int
+    window_ps: int
+    best_frame_origin_ps: float
+    total_pairs: int
+    diag_main_fraction: float
+    diag_pm1_fraction: float
+    offdiag_fraction: float
+    diag_contrast: float
+    accidental_fraction: float
+    score: float
+    scan_rows: list[dict]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _finite(x) -> bool:
     try:
@@ -47,17 +97,12 @@ def _parse_int_list(text: str) -> list[int]:
 
 
 def _normalize_path(raw: str) -> Path:
-    """Accept either a WSL/Linux path or a Windows drive path."""
     s = str(raw).strip()
-
     is_windows_abs = len(s) >= 3 and s[1] == ":" and (s[2] == "\\" or s[2] == "/")
     if not is_windows_abs:
         return Path(s)
-
     if os.name == "nt":
         return Path(s)
-
-    # WSL/Linux: convert Windows drive paths to Linux paths.
     try:
         out = subprocess.check_output(["wslpath", "-a", s], text=True).strip()
         if out:
@@ -66,39 +111,12 @@ def _normalize_path(raw: str) -> Path:
         drive = s[0].lower()
         rest = s[2:].replace("\\", "/").lstrip("/")
         return Path(f"/mnt/{drive}/{rest}")
-
     return Path(s)
 
 
-def _read_npz_timebins(npz_path: Path) -> _RawTimetags:
-    with np.load(str(npz_path), allow_pickle=False) as z:
-        Ch = z["Ch"]
-        TimeTag = z["TimeTag"]
-        overflow_types = z["overflow_types"] if "overflow_types" in z else None
-        missed_events = z["missed_events"] if "missed_events" in z else None
-
-    Ch = np.asarray(Ch)
-    TimeTag = np.asarray(TimeTag)
-
-    acquisition_duration_s = None
-    acquisition_source = None
-    try:
-        if TimeTag.size > 0:
-            span = int(max(0, int(np.max(TimeTag)) - int(np.min(TimeTag))))
-            acquisition_duration_s = float(span) * 1e-12  # project convention: timetag in ps
-            acquisition_source = f"derived_from_npz_span_ps:{npz_path}"
-    except Exception:
-        acquisition_duration_s = None
-
-    return _RawTimetags(
-        Ch=Ch,
-        TimeTag=TimeTag,
-        overflow_types=np.asarray(overflow_types) if overflow_types is not None else None,
-        missed_events=np.asarray(missed_events) if missed_events is not None else None,
-        acquisition_duration_s=acquisition_duration_s,
-        acquisition_duration_source=acquisition_source,
-    )
-
+# ---------------------------------------------------------------------------
+# IO: read ttbin / npz
+# ---------------------------------------------------------------------------
 
 def _read_ttbin_timetags(
     ttbin_path: Path,
@@ -109,20 +127,12 @@ def _read_ttbin_timetags(
     logical_ch_a: int,
     logical_ch_b: int,
 ) -> _RawTimetags:
-    """Read a TimeTagger *.ttbin stream into arrays (requires `TimeTagger` Python package)."""
     try:
         from TimeTagger import FileReader as TTFileReader  # type: ignore
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         raise RuntimeError(
             "JTI extraction requires the Swabian Instruments `TimeTagger` Python API to parse *.ttbin.\n"
             f"Python={sys.executable} cannot import `TimeTagger`: {exc}\n"
-            "\n"
-            "Notes:\n"
-            "- The PyPI packages named `TimeTagger` / `timetagger` are NOT the required library.\n"
-            "- Fix by installing Swabian's Time Tagger software + Python bindings for your Python version,\n"
-            "  then re-run with the same Python environment.\n"
-            "- Alternative: generate `parsed_timebin_data.npz` under --data (or its known subfolders) so this\n"
-            "  script can run without `TimeTagger` (and do not pass --ttbin / --prefer-ttbin)."
         ) from exc
 
     channels: list[int] = []
@@ -158,7 +168,6 @@ def _read_ttbin_timetags(
     TimeTag = np.asarray(timestamps, dtype=np.int64)
     missed_events = np.asarray(missed)
 
-    # Map valid TimeTag events (eventType==0): raw channel ids -> 0/1.
     Ch = np.full(channel.shape, np.nan, dtype=float)
     valid = overflow_types == 0
     Ch[np.logical_and(valid, channel == int(raw_ch_a_id))] = float(int(logical_ch_a))
@@ -169,7 +178,7 @@ def _read_ttbin_timetags(
     try:
         if TimeTag.size > 0:
             span = int(max(0, int(np.max(TimeTag)) - int(np.min(TimeTag))))
-            acquisition_duration_s = float(span) * 1e-12  # project convention: ps -> s
+            acquisition_duration_s = float(span) * 1e-12
             acquisition_source = f"derived_from_ttbin_span_ps:{ttbin_path}"
     except Exception:
         acquisition_duration_s = None
@@ -184,34 +193,46 @@ def _read_ttbin_timetags(
     )
 
 
+def _read_npz_timebins(npz_path: Path) -> _RawTimetags:
+    with np.load(str(npz_path), allow_pickle=False) as z:
+        Ch = z["Ch"]
+        TimeTag = z["TimeTag"]
+        overflow_types = z["overflow_types"] if "overflow_types" in z else None
+        missed_events = z["missed_events"] if "missed_events" in z else None
+
+    Ch = np.asarray(Ch)
+    TimeTag = np.asarray(TimeTag)
+
+    acquisition_duration_s = None
+    acquisition_source = None
+    try:
+        if TimeTag.size > 0:
+            span = int(max(0, int(np.max(TimeTag)) - int(np.min(TimeTag))))
+            acquisition_duration_s = float(span) * 1e-12
+            acquisition_source = f"derived_from_npz_span_ps:{npz_path}"
+    except Exception:
+        acquisition_duration_s = None
+
+    return _RawTimetags(
+        Ch=Ch,
+        TimeTag=TimeTag,
+        overflow_types=np.asarray(overflow_types) if overflow_types is not None else None,
+        missed_events=np.asarray(missed_events) if missed_events is not None else None,
+        acquisition_duration_s=acquisition_duration_s,
+        acquisition_duration_source=acquisition_source,
+    )
+
+
 def _load_timetags(
     *,
-    data_dir: Path,
     ttbin: Path | None,
-    prefer_ttbin: bool,
     max_events: int | None,
     raw_ch_a_id: int,
     raw_ch_b_id: int,
     logical_ch_a: int,
     logical_ch_b: int,
 ) -> tuple[_RawTimetags, Path | None, str]:
-    npz_candidates = [
-        data_dir / "parsed_timebin_data.npz",
-        data_dir / "01_raw_parsing" / "parsed_timebin_data.npz",
-        data_dir / "results" / "01_raw_parsing" / "parsed_timebin_data.npz",
-    ]
-    npz_path = next((p for p in npz_candidates if p.exists()), None)
-
-    use_ttbin = prefer_ttbin or (ttbin is not None) or (npz_path is None)
-    if use_ttbin:
-        if ttbin is None:
-            ttbin_files = sorted(data_dir.glob("*.ttbin"))
-            if not ttbin_files:
-                raise RuntimeError(
-                    f"No *.ttbin found under: {data_dir}. "
-                    "Provide --ttbin or generate parsed_timebin_data.npz first."
-                )
-            ttbin = ttbin_files[0]
+    if ttbin is not None and ttbin.exists():
         return (
             _read_ttbin_timetags(
                 ttbin,
@@ -225,269 +246,398 @@ def _load_timetags(
             "ttbin",
         )
 
-    if npz_path is None:
-        raise RuntimeError(
-            f"No parsed_timebin_data.npz found under: {data_dir}. "
-            "Generate it first or provide --ttbin."
+    # Try npz fallback
+    npz_candidates = [
+        ttbin.parent / "parsed_timebin_data.npz" if ttbin is not None else None,
+        Path("parsed_timebin_data.npz"),
+    ]
+    npz_path = next((p for p in npz_candidates if p is not None and p.exists()), None)
+    if npz_path is not None:
+        return _read_npz_timebins(npz_path), None, "parsed_timebin_data.npz"
+
+    raise RuntimeError(
+        f"No valid input found. Provide --ttbin pointing to a .ttbin file."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Coincidence pairing: all_pairs_window
+# ---------------------------------------------------------------------------
+
+def _find_coincidence_pairs(
+    timetags: _RawTimetags,
+    *,
+    window_ps: int,
+    logical_ch_a: int,
+    logical_ch_b: int,
+) -> _CoincidenceResult:
+    """Find all coincidence pairs within window. Events can be reused."""
+    Ch = timetags.Ch
+    TimeTag = timetags.TimeTag
+    if Ch.shape != TimeTag.shape:
+        raise ValueError(f"Ch and TimeTag shape mismatch: {Ch.shape} vs {TimeTag.shape}")
+
+    t_a = np.sort(TimeTag[Ch == float(int(logical_ch_a))].astype(np.int64, copy=False))
+    t_b = np.sort(TimeTag[Ch == float(int(logical_ch_b))].astype(np.int64, copy=False))
+
+    if t_a.size == 0 or t_b.size == 0:
+        return _CoincidenceResult(
+            t_a_paired=np.array([], dtype=np.int64),
+            t_b_paired=np.array([], dtype=np.int64),
+            n_events_a=int(t_a.size),
+            n_events_b=int(t_b.size),
+            window_ps=int(window_ps),
+            pairing_mode="all_pairs_window",
+            allows_event_reuse=True,
         )
-    return _read_npz_timebins(npz_path), None, "parsed_timebin_data.npz"
+
+    w = int(window_ps)
+    # Find all B events within window of each A event
+    left = np.searchsorted(t_b, t_a - w, side="left")
+    right = np.searchsorted(t_b, t_a + w, side="right")
+    pair_counts = right - left
+    total_pairs = int(np.sum(pair_counts))
+
+    if total_pairs <= 0:
+        return _CoincidenceResult(
+            t_a_paired=np.array([], dtype=np.int64),
+            t_b_paired=np.array([], dtype=np.int64),
+            n_events_a=int(t_a.size),
+            n_events_b=int(t_b.size),
+            window_ps=int(window_ps),
+            pairing_mode="all_pairs_window",
+            allows_event_reuse=True,
+        )
+
+    # Build paired arrays
+    a_rep = np.repeat(t_a, pair_counts)
+    b_vals = np.empty(total_pairs, dtype=np.int64)
+    pos = 0
+    for lo, hi in zip(left, right):
+        n = int(hi - lo)
+        if n:
+            b_vals[pos:pos + n] = t_b[lo:hi]
+            pos += n
+
+    return _CoincidenceResult(
+        t_a_paired=a_rep,
+        t_b_paired=b_vals,
+        n_events_a=int(t_a.size),
+        n_events_b=int(t_b.size),
+        window_ps=int(window_ps),
+        pairing_mode="all_pairs_window",
+        allows_event_reuse=True,
+    )
 
 
-def _unique_frames_single_hit(frames: np.ndarray, data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Given sorted `frames`, keep only frames that appear exactly once, returning (frames, data) for those hits."""
-    if frames.size == 0:
-        return frames, data
-    if frames.size == 1:
-        return frames, data
+def _find_coincidence_pairs_with_delay(
+    timetags: _RawTimetags,
+    *,
+    window_ps: int,
+    logical_ch_a: int,
+    logical_ch_b: int,
+    delay_ps: int,
+) -> _CoincidenceResult:
+    """Find coincidence pairs with B channel delayed by delay_ps (for accidentals estimation)."""
+    Ch = timetags.Ch
+    TimeTag = timetags.TimeTag
+    if Ch.shape != TimeTag.shape:
+        raise ValueError(f"Ch and TimeTag shape mismatch: {Ch.shape} vs {TimeTag.shape}")
 
-    change_idx = np.flatnonzero(frames[1:] != frames[:-1]) + 1
-    starts = np.concatenate(([0], change_idx))
-    ends = np.concatenate((change_idx, [frames.size]))
-    counts = ends - starts
-    keep = counts == 1
-    kept_starts = starts[keep]
-    return frames[kept_starts], data[kept_starts]
+    t_a = np.sort(TimeTag[Ch == float(int(logical_ch_a))].astype(np.int64, copy=False))
+    t_b = np.sort(TimeTag[Ch == float(int(logical_ch_b))].astype(np.int64, copy=False)) + np.int64(delay_ps)
 
+    if t_a.size == 0 or t_b.size == 0:
+        return _CoincidenceResult(
+            t_a_paired=np.array([], dtype=np.int64),
+            t_b_paired=np.array([], dtype=np.int64),
+            n_events_a=int(t_a.size),
+            n_events_b=int(t_b.size),
+            window_ps=int(window_ps),
+            pairing_mode="all_pairs_window_delayed",
+            allows_event_reuse=True,
+        )
+
+    w = int(window_ps)
+    left = np.searchsorted(t_b, t_a - w, side="left")
+    right = np.searchsorted(t_b, t_a + w, side="right")
+    pair_counts = right - left
+    total_pairs = int(np.sum(pair_counts))
+
+    if total_pairs <= 0:
+        return _CoincidenceResult(
+            t_a_paired=np.array([], dtype=np.int64),
+            t_b_paired=np.array([], dtype=np.int64),
+            n_events_a=int(t_a.size),
+            n_events_b=int(t_b.size),
+            window_ps=int(window_ps),
+            pairing_mode="all_pairs_window_delayed",
+            allows_event_reuse=True,
+        )
+
+    a_rep = np.repeat(t_a, pair_counts)
+    b_vals = np.empty(total_pairs, dtype=np.int64)
+    pos = 0
+    for lo, hi in zip(left, right):
+        n = int(hi - lo)
+        if n:
+            b_vals[pos:pos + n] = t_b[lo:hi]
+            pos += n
+
+    return _CoincidenceResult(
+        t_a_paired=a_rep,
+        t_b_paired=b_vals,
+        n_events_a=int(t_a.size),
+        n_events_b=int(t_b.size),
+        window_ps=int(window_ps),
+        pairing_mode="all_pairs_window_delayed",
+        allows_event_reuse=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Binning: CV, DV, and SVD unwrapped
+# ---------------------------------------------------------------------------
 
 def _time_tags_to_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_origin_ps: float) -> np.ndarray:
-    shifted = times_ps.astype(np.float64, copy=False) - float(frame_origin_ps)
-    bins = np.floor(shifted / float(bin_width_ps))
+    """Convert timestamps to bin indices using integer arithmetic to avoid float64 precision loss."""
+    origin_int = np.int64(int(round(frame_origin_ps)))
+    shifted = times_ps - origin_int
+    bins = shifted // np.int64(bin_width_ps)
     return bins.astype(np.int64, copy=False)
 
 
-def _pairs_from_timetags(
-    timetags: _RawTimetags,
+def _compute_cv_histogram(
+    t_a_paired: np.ndarray,
+    t_b_paired: np.ndarray,
     *,
-    bin_width_ps: int,
-    frame_bins: int,
+    frame_period_ps: int,
+    fine_bin_ps: int,
     frame_origin_ps: float,
-    logical_ch_a: int,
-    logical_ch_b: int,
+) -> np.ndarray:
+    """Compute CV 2D histogram with fine bins. Uses integer arithmetic to avoid float64 precision loss."""
+    n_bins = int(frame_period_ps // fine_bin_ps)
+    if t_a_paired.size == 0:
+        return np.zeros((n_bins, n_bins), dtype=np.float64)
+
+    # All arithmetic in int64 to avoid float64 precision loss on large timestamps
+    origin_int = np.int64(int(round(frame_origin_ps)))
+    period = np.int64(frame_period_ps)
+    fine = np.int64(fine_bin_ps)
+
+    t_a_shifted = t_a_paired - origin_int
+    t_b_shifted = t_b_paired - origin_int
+
+    a_mod = np.mod(t_a_shifted, period)
+    b_mod = np.mod(t_b_shifted, period)
+
+    a_bin = (a_mod // fine).astype(np.int64)
+    b_bin = (b_mod // fine).astype(np.int64)
+
+    # Clip to valid range (safety)
+    np.clip(a_bin, 0, n_bins - 1, out=a_bin)
+    np.clip(b_bin, 0, n_bins - 1, out=b_bin)
+
+    cv = np.zeros((n_bins, n_bins), dtype=np.float64)
+    np.add.at(cv, (a_bin, b_bin), 1.0)
+    return cv
+
+
+def _compute_dv_matrix(
+    t_a_paired: np.ndarray,
+    t_b_paired: np.ndarray,
+    *,
+    dimension: int,
+    binwidth_ps: int,
+    frame_origin_ps: float,
+) -> np.ndarray:
+    """Compute DV JTI matrix with discrete bins. Uses integer arithmetic to avoid float64 precision loss."""
+    if t_a_paired.size == 0:
+        return np.zeros((dimension, dimension), dtype=np.float64)
+
+    # All arithmetic in int64 to avoid float64 precision loss on large timestamps
+    origin_int = np.int64(int(round(frame_origin_ps)))
+    bw = np.int64(binwidth_ps)
+    dim = np.int64(dimension)
+
+    t_a_shifted = t_a_paired - origin_int
+    t_b_shifted = t_b_paired - origin_int
+
+    a_bin = t_a_shifted // bw
+    b_bin = t_b_shifted // bw
+
+    # Frame-local bins
+    a_local = np.mod(a_bin, dim).astype(np.int64)
+    b_local = np.mod(b_bin, dim).astype(np.int64)
+
+    # Clip to valid range (safety)
+    np.clip(a_local, 0, dimension - 1, out=a_local)
+    np.clip(b_local, 0, dimension - 1, out=b_local)
+
+    dv = np.zeros((dimension, dimension), dtype=np.float64)
+    np.add.at(dv, (a_local, b_local), 1.0)
+    return dv
+
+
+def _compute_unwrapped_edge_guarded_jti(
+    t_a_paired: np.ndarray,
+    t_b_paired: np.ndarray,
+    *,
+    binwidth_ps: int,
+    dim: int,
+    origin_ps: int,
+    tau0_ps: int = 0,
+    guard_bins: int = 2,
 ) -> tuple[np.ndarray, dict]:
-    """Return (dA,dB) pairs (frame-local bin index) using strict single-hit-per-frame matching."""
-    if bin_width_ps <= 0:
-        raise ValueError("bin_width_ps must be positive")
-    if frame_bins <= 0:
-        raise ValueError("frame_bins must be positive")
+    """Compute unwrapped, edge-guarded, non-cyclic JTI for SVD/Schmidt analysis.
 
-    Ch = timetags.Ch
-    TimeTag = timetags.TimeTag
-    if Ch.shape != TimeTag.shape:
-        raise ValueError(f"Ch and TimeTag shape mismatch: {Ch.shape} vs {TimeTag.shape}")
+    Rejects cross-frame pairs and applies edge guard to ensure finite-support kernel.
+    All arithmetic in int64 to avoid float64 precision loss on large timestamps.
+    """
+    if t_a_paired.size == 0:
+        return np.zeros((dim, dim), dtype=np.float64), {
+            "raw_pairs_before_unwrap": 0,
+            "rejected_cross_frame_pairs": 0,
+            "rejected_edge_pairs": 0,
+            "kept_pairs": 0,
+            "kept_fraction_of_raw_pairs": 0.0,
+            "cross_frame_fraction": 0.0,
+            "edge_rejected_fraction": 0.0,
+        }
 
-    ch_a = float(int(logical_ch_a))
-    ch_b = float(int(logical_ch_b))
-    t0 = TimeTag[Ch == ch_a]
-    t1 = TimeTag[Ch == ch_b]
+    # All arithmetic in int64
+    origin = np.int64(origin_ps)
+    tau0 = np.int64(tau0_ps)
+    bw = np.int64(binwidth_ps)
+    frame_period = np.int64(dim) * bw
+    guard_ps = np.int64(guard_bins) * bw
 
-    b0 = _time_tags_to_bins(t0, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
-    b1 = _time_tags_to_bins(t1, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
-    b0.sort()
-    b1.sort()
+    raw_pairs = t_a_paired.size
 
-    N = np.int64(int(frame_bins))
-    f0 = np.floor_divide(b0, N)
-    d0 = np.mod(b0, N).astype(np.int64, copy=False)
-    f1 = np.floor_divide(b1, N)
-    d1 = np.mod(b1, N).astype(np.int64, copy=False)
+    # Shift by origin
+    ua = t_a_paired.astype(np.int64) - origin
+    ub = (t_b_paired.astype(np.int64) - tau0) - origin
 
-    f0u, d0u = _unique_frames_single_hit(f0, d0)
-    f1u, d1u = _unique_frames_single_hit(f1, d1)
+    # Compute frame indices
+    frame_a = ua // frame_period
+    frame_b = ub // frame_period
 
-    common, i0, i1 = np.intersect1d(f0u, f1u, assume_unique=True, return_indices=True)
-    pairs = np.column_stack((d0u[i0], d1u[i1])).astype(np.int64, copy=False)
+    # Reject cross-frame pairs
+    same_frame = frame_a == frame_b
+    n_cross_frame = int(np.sum(~same_frame))
+    ua = ua[same_frame]
+    ub = ub[same_frame]
+    frame_a = frame_a[same_frame]
+
+    if ua.size == 0:
+        return np.zeros((dim, dim), dtype=np.float64), {
+            "raw_pairs_before_unwrap": raw_pairs,
+            "rejected_cross_frame_pairs": n_cross_frame,
+            "rejected_edge_pairs": 0,
+            "kept_pairs": 0,
+            "kept_fraction_of_raw_pairs": 0.0,
+            "cross_frame_fraction": n_cross_frame / raw_pairs if raw_pairs > 0 else 0.0,
+            "edge_rejected_fraction": 0.0,
+        }
+
+    # Compute frame-local coordinates
+    xa = ua - frame_a * frame_period
+    xb = ub - frame_a * frame_period  # same frame_a since same_frame
+
+    # Edge guard: reject events near frame boundaries
+    in_guard = (
+        (xa >= guard_ps) & (xa < frame_period - guard_ps) &
+        (xb >= guard_ps) & (xb < frame_period - guard_ps)
+    )
+    n_edge_rejected = int(ua.size - np.sum(in_guard))
+    xa = xa[in_guard]
+    xb = xb[in_guard]
+
+    if xa.size == 0:
+        return np.zeros((dim, dim), dtype=np.float64), {
+            "raw_pairs_before_unwrap": raw_pairs,
+            "rejected_cross_frame_pairs": n_cross_frame,
+            "rejected_edge_pairs": n_edge_rejected,
+            "kept_pairs": 0,
+            "kept_fraction_of_raw_pairs": 0.0,
+            "cross_frame_fraction": n_cross_frame / raw_pairs if raw_pairs > 0 else 0.0,
+            "edge_rejected_fraction": n_edge_rejected / raw_pairs if raw_pairs > 0 else 0.0,
+        }
+
+    # Bin into matrix
+    i = xa // bw
+    j = xb // bw
+
+    # Clip to valid range (safety)
+    np.clip(i, 0, dim - 1, out=i)
+    np.clip(j, 0, dim - 1, out=j)
+
+    H = np.zeros((dim, dim), dtype=np.float64)
+    np.add.at(H, (i, j), 1.0)
+
+    kept = int(xa.size)
     meta = {
-        "n_events_total": int(TimeTag.size),
-        "n_events_ch0": int(t0.size),
-        "n_events_ch1": int(t1.size),
-        "n_frames_common": int(common.size),
-        "n_pairs": int(pairs.shape[0]),
-        "frame_origin_ps": float(frame_origin_ps),
+        "raw_pairs_before_unwrap": raw_pairs,
+        "rejected_cross_frame_pairs": n_cross_frame,
+        "rejected_edge_pairs": n_edge_rejected,
+        "kept_pairs": kept,
+        "kept_fraction_of_raw_pairs": kept / raw_pairs if raw_pairs > 0 else 0.0,
+        "cross_frame_fraction": n_cross_frame / raw_pairs if raw_pairs > 0 else 0.0,
+        "edge_rejected_fraction": n_edge_rejected / raw_pairs if raw_pairs > 0 else 0.0,
     }
-    return pairs, meta
+    return H, meta
 
 
-def _jti_from_pairs(pairs: np.ndarray, *, n_bins: int) -> np.ndarray:
-    jti = np.zeros((int(n_bins), int(n_bins)), dtype=np.float64)
-    if pairs.size == 0:
-        return jti
-    a = pairs[:, 0].astype(np.int64, copy=False)
-    b = pairs[:, 1].astype(np.int64, copy=False)
-    valid = (a >= 0) & (a < int(n_bins)) & (b >= 0) & (b < int(n_bins))
-    if not np.any(valid):
-        return jti
-    np.add.at(jti, (a[valid], b[valid]), 1.0)
-    return jti
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
 
-
-def _frame_local_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_bins: int, frame_origin_ps: float) -> np.ndarray:
-    global_bins = _time_tags_to_bins(times_ps, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
-    return np.mod(global_bins, int(frame_bins)).astype(np.int64, copy=False)
-
-
-def _window_pairs_nearest(t_a: np.ndarray, t_b: np.ndarray, window_ps: int) -> tuple[np.ndarray, np.ndarray]:
-    if t_a.size == 0 or t_b.size == 0:
-        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
-    pos = np.searchsorted(t_b, t_a)
-    best_delta = np.full(t_a.shape, np.iinfo(np.int64).max, dtype=np.int64)
-    best_t_b = np.zeros(t_a.shape, dtype=np.int64)
-    right = pos < t_b.size
-    best_delta[right] = t_b[pos[right]] - t_a[right]
-    best_t_b[right] = t_b[pos[right]]
-    left = pos > 0
-    left_delta = t_b[pos[left] - 1] - t_a[left]
-    use_left = np.abs(left_delta) < np.abs(best_delta[left])
-    left_indices = np.flatnonzero(left)
-    replace = left_indices[use_left]
-    best_delta[replace] = left_delta[use_left]
-    best_t_b[replace] = t_b[pos[replace] - 1]
-    keep = np.abs(best_delta) <= int(window_ps)
-    return t_a[keep].copy(), best_t_b[keep].copy()
-
-
-def _window_pairs_greedy_unique(t_a: np.ndarray, t_b: np.ndarray, window_ps: int) -> tuple[np.ndarray, np.ndarray]:
-    i = 0
-    j = 0
-    out_a: list[int] = []
-    out_b: list[int] = []
-    n_a = int(t_a.size)
-    n_b = int(t_b.size)
-    w = int(window_ps)
-    while i < n_a and j < n_b:
-        av = int(t_a[i])
-        while j < n_b and int(t_b[j]) < av - w:
-            j += 1
-        if j >= n_b:
-            break
-        candidates: list[tuple[int, int]] = []
-        if abs(int(t_b[j]) - av) <= w:
-            candidates.append((abs(int(t_b[j]) - av), j))
-        if j + 1 < n_b and abs(int(t_b[j + 1]) - av) <= w:
-            candidates.append((abs(int(t_b[j + 1]) - av), j + 1))
-        if candidates:
-            _, jj = min(candidates)
-            out_a.append(av)
-            out_b.append(int(t_b[jj]))
-            i += 1
-            j = jj + 1
-        else:
-            i += 1
-    return np.asarray(out_a, dtype=np.int64), np.asarray(out_b, dtype=np.int64)
-
-
-def _jti_from_all_pairs_window(
-    t_a: np.ndarray,
-    t_b: np.ndarray,
-    *,
-    window_ps: int,
-    bin_width_ps: int,
-    frame_bins: int,
-    frame_origin_ps: float,
-    chunk_events: int = 200_000,
-) -> tuple[np.ndarray, dict]:
-    counts = np.zeros((int(frame_bins), int(frame_bins)), dtype=np.float64)
-    total_pairs = 0
-    a_with_pairs = 0
-    max_b_per_a = 0
-    t_b = np.asarray(t_b, dtype=np.int64)
-    for start in range(0, int(t_a.size), int(chunk_events)):
-        a = np.asarray(t_a[start : start + int(chunk_events)], dtype=np.int64)
-        left = np.searchsorted(t_b, a - int(window_ps), side="left")
-        right = np.searchsorted(t_b, a + int(window_ps), side="right")
-        pair_counts = right - left
-        chunk_total = int(np.sum(pair_counts))
-        if chunk_total <= 0:
-            continue
-        a_with_pairs += int(np.count_nonzero(pair_counts))
-        max_b_per_a = max(max_b_per_a, int(np.max(pair_counts)))
-        a_rep = np.repeat(a, pair_counts)
-        b_vals = np.empty(chunk_total, dtype=np.int64)
-        pos = 0
-        for lo, hi in zip(left, right):
-            n = int(hi - lo)
-            if n:
-                b_vals[pos : pos + n] = t_b[lo:hi]
-                pos += n
-        x = _frame_local_bins(a_rep, bin_width_ps=bin_width_ps, frame_bins=frame_bins, frame_origin_ps=frame_origin_ps)
-        y = _frame_local_bins(b_vals, bin_width_ps=bin_width_ps, frame_bins=frame_bins, frame_origin_ps=frame_origin_ps)
-        np.add.at(counts, (x, y), 1.0)
-        total_pairs += chunk_total
-    return counts, {
-        "n_pairs": int(total_pairs),
-        "n_pairs_raw_window": int(total_pairs),
-        "n_a_with_window_pairs": int(a_with_pairs),
-        "max_b_per_a_in_window": int(max_b_per_a),
-    }
-
-
-def _window_counts_from_timetags(
-    timetags: _RawTimetags,
-    *,
-    bin_width_ps: int,
-    frame_bins: int,
-    frame_origin_ps: float,
-    logical_ch_a: int,
-    logical_ch_b: int,
-    pairing_mode: str,
-    coincidence_window_ps: int,
-) -> tuple[np.ndarray, dict]:
-    Ch = timetags.Ch
-    TimeTag = timetags.TimeTag
-    if Ch.shape != TimeTag.shape:
-        raise ValueError(f"Ch and TimeTag shape mismatch: {Ch.shape} vs {TimeTag.shape}")
-    t_a = np.sort(TimeTag[Ch == float(int(logical_ch_a))].astype(np.int64, copy=False))
-    t_b = np.sort(TimeTag[Ch == float(int(logical_ch_b))].astype(np.int64, copy=False))
-    if pairing_mode == "all_pairs_window":
-        counts, meta = _jti_from_all_pairs_window(
-            t_a,
-            t_b,
-            window_ps=int(coincidence_window_ps),
-            bin_width_ps=int(bin_width_ps),
-            frame_bins=int(frame_bins),
-            frame_origin_ps=float(frame_origin_ps),
-        )
-        meta.update({"n_events_ch0": int(t_a.size), "n_events_ch1": int(t_b.size), "frame_origin_ps": float(frame_origin_ps)})
-        return counts, meta
-    if pairing_mode == "nearest_window":
-        p_a, p_b = _window_pairs_nearest(t_a, t_b, int(coincidence_window_ps))
-    elif pairing_mode == "greedy_unique_window":
-        p_a, p_b = _window_pairs_greedy_unique(t_a, t_b, int(coincidence_window_ps))
-    else:
-        raise ValueError(f"unsupported pairing_mode: {pairing_mode}")
-    x = _frame_local_bins(p_a, bin_width_ps=bin_width_ps, frame_bins=frame_bins, frame_origin_ps=frame_origin_ps)
-    y = _frame_local_bins(p_b, bin_width_ps=bin_width_ps, frame_bins=frame_bins, frame_origin_ps=frame_origin_ps)
-    counts = _jti_from_pairs(np.column_stack((x, y)).astype(np.int64, copy=False), n_bins=int(frame_bins))
-    return counts, {
-        "n_events_ch0": int(t_a.size),
-        "n_events_ch1": int(t_b.size),
-        "n_pairs": int(p_a.size),
-        "n_pairs_raw_window": int(p_a.size),
-        "frame_origin_ps": float(frame_origin_ps),
-    }
-
-
-def compute_jti_diagnostics(counts: np.ndarray) -> dict[str, float]:
+def compute_jti_diagnostics(counts: np.ndarray, *, band_bins: int = 1) -> dict[str, float]:
+    """Compute JTI diagnostics including diag_band_fraction and diag_contrast."""
     total_sum = float(np.sum(counts))
     diag_main_sum = float(np.trace(counts))
     diag_pm1_sum = float(np.trace(counts, offset=1) + np.trace(counts, offset=-1))
 
     if total_sum <= 0.0:
-        diag_main_fraction = 0.0
-        diag_pm1_fraction = 0.0
-        diag_contrast = 0.0
-    else:
-        diag_main_fraction = diag_main_sum / total_sum
-        diag_pm1_fraction = diag_pm1_sum / total_sum
-        diag_contrast = diag_main_fraction - diag_pm1_fraction
+        return {
+            "total_sum": 0.0,
+            "diag_main_sum": 0.0,
+            "diag_pm1_sum": 0.0,
+            "diag_band_sum": 0.0,
+            "offdiag_sum": 0.0,
+            "diag_main_fraction": 0.0,
+            "diag_pm1_fraction": 0.0,
+            "diag_band_fraction": 0.0,
+            "offdiag_fraction": 0.0,
+            "diag_contrast": 0.0,
+        }
+
+    # diag_band_sum: sum over |row-col| <= band_bins
+    n = int(counts.shape[0])
+    band = int(band_bins)
+    diag_band_sum = diag_main_sum
+    for offset in range(1, band + 1):
+        diag_band_sum += float(np.trace(counts, offset=offset) + np.trace(counts, offset=-offset))
+
+    offdiag_sum = total_sum - diag_band_sum
 
     return {
+        "total_sum": total_sum,
         "diag_main_sum": diag_main_sum,
         "diag_pm1_sum": diag_pm1_sum,
-        "total_sum": total_sum,
-        "diag_main_fraction": diag_main_fraction,
-        "diag_pm1_fraction": diag_pm1_fraction,
-        "diag_contrast": diag_contrast,
+        "diag_band_sum": diag_band_sum,
+        "offdiag_sum": offdiag_sum,
+        "diag_main_fraction": diag_main_sum / total_sum,
+        "diag_pm1_fraction": diag_pm1_sum / total_sum,
+        "diag_band_fraction": diag_band_sum / total_sum,
+        "offdiag_fraction": offdiag_sum / total_sum,
+        "diag_contrast": diag_pm1_sum / offdiag_sum if offdiag_sum > 0 else 0.0,
     }
+
+
+def _compute_score(diag_band_fraction: float, accidental_fraction: float) -> float:
+    """Compute frame_origin selection score: diag_band_fraction - accidental_fraction."""
+    return float(diag_band_fraction) - float(accidental_fraction)
 
 
 def diagonal_coincidence_profile(counts: np.ndarray, *, band_bins: int = 1) -> np.ndarray:
@@ -509,132 +659,126 @@ def diagonal_coincidence_profile(counts: np.ndarray, *, band_bins: int = 1) -> n
     return out
 
 
-def _save_diagonal_profile_csv(path: Path, profile: np.ndarray, *, bin_width_ps: int) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["bin_index", "time_ps", "coincidence_counts"])
-        for i, value in enumerate(np.asarray(profile, dtype=np.float64)):
-            w.writerow([int(i), int(i) * int(bin_width_ps), float(value)])
+# ---------------------------------------------------------------------------
+# Frame origin scan
+# ---------------------------------------------------------------------------
 
-
-def _plot_diagonal_profile_png(path: Path, profile: np.ndarray, *, bin_width_ps: int, band_bins: int, title: str) -> None:
-    try:
-        import matplotlib.pyplot as plt
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(f"matplotlib is required for diagonal profile plotting: {exc}") from exc
-
-    x_ns = np.arange(int(profile.size), dtype=np.float64) * float(bin_width_ps) / 1000.0
-    fig, ax = plt.subplots(figsize=(8.0, 3.8), dpi=160)
-    ax.plot(x_ns, np.asarray(profile, dtype=np.float64), linewidth=1.0)
-    ax.set_xlabel("Frame-local time along diagonal (ns)")
-    ax.set_ylabel("Coincidence counts")
-    ax.set_title(f"{title} | diagonal band +/-{int(band_bins)} bin")
-    ax.grid(True, linewidth=0.4, alpha=0.35)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-
-
-def _accidentals_subtract(counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    total = float(np.sum(counts))
-    if not _finite(total) or total <= 0:
-        return counts.copy(), np.zeros_like(counts, dtype=np.float64)
-    r = np.sum(counts, axis=1)
-    c = np.sum(counts, axis=0)
-    acc = np.outer(r, c) / total
-    corr = counts - acc
-    corr = np.maximum(corr, 0.0)
-    return corr, acc
-
-
-def _shift_zero_pad(mat: np.ndarray, shift: tuple[int, int]) -> np.ndarray:
-    dy, dx = int(shift[0]), int(shift[1])
-    out = np.zeros_like(mat)
-
-    if mat.size == 0:
-        return out
-
-    h, w = int(mat.shape[0]), int(mat.shape[1])
-
-    # Destination ranges.
-    y0 = max(0, dy)
-    y1 = min(h, h + dy)
-    x0 = max(0, dx)
-    x1 = min(w, w + dx)
-
-    # Corresponding source ranges.
-    sy0 = max(0, -dy)
-    sy1 = sy0 + (y1 - y0)
-    sx0 = max(0, -dx)
-    sx1 = sx0 + (x1 - x0)
-
-    if y1 <= y0 or x1 <= x0:
-        return out
-
-    out[y0:y1, x0:x1] = mat[sy0:sy1, sx0:sx1]
-    return out
-
-
-def _shift_center_tile_window(mat: np.ndarray, peak: tuple[int, int], center: tuple[int, int]) -> np.ndarray:
-    """
-    Align by taking an NxN window from a 3x3 tiled version of `mat`.
-
-    This avoids corner wrap artifacts while preserving all data (no zero-padding loss),
-    which is often preferable for modulo/frame-based JTI visualizations.
-    """
-    h, w = int(mat.shape[0]), int(mat.shape[1])
-    tiled = np.tile(mat, (3, 3))
-
-    peak_y = int(peak[0]) + h
-    peak_x = int(peak[1]) + w
-
-    y0 = peak_y - int(center[0])
-    x0 = peak_x - int(center[1])
-    return tiled[y0 : y0 + h, x0 : x0 + w]
-
-
-def _peak_align_to_center(
-    mat: np.ndarray,
+def _scan_frame_origin(
+    timetags: _RawTimetags,
     *,
-    mode: str = "roll",
-) -> tuple[np.ndarray, tuple[int, int] | None, tuple[int, int]]:
-    if mat.size == 0 or not np.any(mat):
-        return mat.copy(), None, (0, 0)
-    peak = np.unravel_index(int(np.argmax(mat)), mat.shape)
-    center = (mat.shape[0] // 2, mat.shape[1] // 2)
-    shift = (int(center[0] - peak[0]), int(center[1] - peak[1]))
+    k: int,
+    binwidth_ps: int,
+    dimension: int,
+    band_bins: int,
+    logical_ch_a: int,
+    logical_ch_b: int,
+    accidental_delay_mult: int,
+    origin_start_ps: float,
+    origin_stop_ps: float | None,
+    origin_step_ps: float,
+    quiet: bool,
+) -> _ScanResult:
+    """Scan frame_origin for a given k value."""
+    window_ps = k * binwidth_ps
+    frame_period_ps = dimension * binwidth_ps
+    stop_ps = float(origin_stop_ps if origin_stop_ps is not None else binwidth_ps)
 
-    m = str(mode).strip().lower()
-    if m in {"roll", "wrap"}:
-        out = np.roll(np.roll(mat, shift[0], axis=0), shift[1], axis=1)
-    elif m in {"pad", "zero", "zeropad", "zero_pad"}:
-        out = _shift_zero_pad(mat, shift)
-    elif m in {"tile", "window", "tilewindow", "tile_window"}:
-        out = _shift_center_tile_window(mat, peak, center)
-    else:
-        raise ValueError(f"unknown align mode: {mode} (expected roll/pad/tile)")
-    return out, (int(peak[0]), int(peak[1])), shift
+    # Pre-find coincidence pairs (independent of frame_origin)
+    result = _find_coincidence_pairs(
+        timetags,
+        window_ps=window_ps,
+        logical_ch_a=logical_ch_a,
+        logical_ch_b=logical_ch_b,
+    )
+
+    # Pre-find accidentals pairs (B delayed by several frame periods)
+    delay_ps = frame_period_ps * accidental_delay_mult
+    acc_result = _find_coincidence_pairs_with_delay(
+        timetags,
+        window_ps=window_ps,
+        logical_ch_a=logical_ch_a,
+        logical_ch_b=logical_ch_b,
+        delay_ps=delay_ps,
+    )
+
+    if not quiet:
+        print(f"  k={k}, window_ps={window_ps}, pairs={result.t_a_paired.size}, acc_pairs={acc_result.t_a_paired.size}")
+
+    scan_rows: list[dict] = []
+    best_score = -float("inf")
+    best_origin = 0.0
+
+    # Scan frame origins
+    current = float(origin_start_ps)
+    tolerance = abs(origin_step_ps) * 1e-9 + 1e-12
+    while current <= stop_ps + tolerance:
+        origin = float(round(current, 12))
+
+        # Compute DV matrix for this origin
+        dv = _compute_dv_matrix(
+            result.t_a_paired,
+            result.t_b_paired,
+            dimension=dimension,
+            binwidth_ps=binwidth_ps,
+            frame_origin_ps=origin,
+        )
+
+        # Compute accidentals DV matrix
+        dv_acc = _compute_dv_matrix(
+            acc_result.t_a_paired,
+            acc_result.t_b_paired,
+            dimension=dimension,
+            binwidth_ps=binwidth_ps,
+            frame_origin_ps=origin,
+        )
+
+        diag = compute_jti_diagnostics(dv, band_bins=band_bins)
+        diag_acc = compute_jti_diagnostics(dv_acc, band_bins=band_bins)
+
+        total_pairs = int(diag["total_sum"])
+        accidental_fraction = diag_acc["total_sum"] / total_pairs if total_pairs > 0 else 0.0
+        score = _compute_score(diag["diag_band_fraction"], accidental_fraction)
+
+        row = {
+            "frame_origin_ps": origin,
+            "total_pairs": total_pairs,
+            "diag_main_fraction": diag["diag_main_fraction"],
+            "diag_pm1_fraction": diag["diag_pm1_fraction"],
+            "diag_band_fraction": diag["diag_band_fraction"],
+            "offdiag_fraction": diag["offdiag_fraction"],
+            "diag_contrast": diag["diag_contrast"],
+            "accidental_fraction": accidental_fraction,
+            "score": score,
+        }
+        scan_rows.append(row)
+
+        if score > best_score:
+            best_score = score
+            best_origin = origin
+
+        current += origin_step_ps
+
+    if not quiet:
+        print(f"    best_origin={best_origin:.1f}ps, score={best_score:.4f}")
+
+    return _ScanResult(
+        k=k,
+        window_ps=window_ps,
+        best_frame_origin_ps=best_origin,
+        total_pairs=int(result.t_a_paired.size),
+        diag_main_fraction=scan_rows[-1]["diag_main_fraction"] if scan_rows else 0.0,
+        diag_pm1_fraction=scan_rows[-1]["diag_pm1_fraction"] if scan_rows else 0.0,
+        offdiag_fraction=scan_rows[-1]["offdiag_fraction"] if scan_rows else 0.0,
+        diag_contrast=scan_rows[-1]["diag_contrast"] if scan_rows else 0.0,
+        accidental_fraction=scan_rows[-1]["accidental_fraction"] if scan_rows else 0.0,
+        score=best_score,
+        scan_rows=scan_rows,
+    )
 
 
-def _normalize(mat: np.ndarray, mode: str) -> np.ndarray:
-    mode = str(mode).strip().lower()
-    if mode in {"none", ""}:
-        return mat.copy()
-    if mode == "sum":
-        s = float(np.sum(mat))
-        return (mat / s) if s > 0 else mat.copy()
-    if mode == "max":
-        m = float(np.max(mat)) if mat.size else 0.0
-        return (mat / m) if m > 0 else mat.copy()
-    if mode in {"diagmax", "diag_max", "diagonalmax", "diagonal_max"}:
-        # Normalize so the maximum value on the main diagonal becomes 1.
-        if mat.size == 0:
-            return mat.copy()
-        d = np.diag(mat)
-        m = float(np.max(d)) if d.size else 0.0
-        return (mat / m) if m > 0 else mat.copy()
-    raise ValueError(f"unknown normalize mode: {mode} (expected none/sum/max/diagmax)")
-
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
 
 def _save_csv_matrix(path: Path, mat: np.ndarray) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -644,618 +788,537 @@ def _save_csv_matrix(path: Path, mat: np.ndarray) -> None:
             w.writerow([i] + [float(x) for x in mat[i, :].tolist()])
 
 
-def _save_frame_origin_scan_csv(path: Path, rows: list[dict]) -> None:
-    fieldnames = [
-        "frame_origin_ps",
-        "dimension",
-        "bin_width_ps",
-        "n_pairs",
-        "total_sum",
-        "diag_main_sum",
-        "diag_pm1_sum",
-        "diag_main_fraction",
-        "diag_pm1_fraction",
-        "diag_contrast",
-    ]
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row[k] for k in fieldnames})
-
-
-def _plot_png(path: Path, mat: np.ndarray, *, title: str) -> None:
+def _save_cv_png(
+    path: Path,
+    cv: np.ndarray,
+    *,
+    k: int,
+    fine_bin_ps: int,
+    frame_period_ps: int,
+    frame_origin_ps: float,
+    total_pairs: int,
+) -> None:
     try:
         import matplotlib.pyplot as plt
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(f"matplotlib is required for --plot: {exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"matplotlib required for PNG output: {exc}") from exc
 
-    n = int(mat.shape[0])
+    n_bins = cv.shape[0]
+    extent = [0, frame_period_ps / 1000.0, 0, frame_period_ps / 1000.0]  # ns
 
-    fig, ax = plt.subplots(figsize=(6.0, 5.0), dpi=160)
+    fig, ax = plt.subplots(figsize=(8, 7), dpi=150)
     im = ax.imshow(
-        mat,
+        cv,
         origin="lower",
-        cmap="viridis",
-        extent=[-0.5, n - 0.5, -0.5, n - 0.5],
         aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        interpolation="nearest",
     )
-    ax.set_title(title)
-    ax.set_xlabel("Signal time-bin index")
-    ax.set_ylabel("Idler time-bin index")
-    ax.set_xticks(range(n))
-    ax.set_yticks(range(n))
-    fig.colorbar(im, ax=ax, label="Counts")
+    ax.set_xlabel("t_A mod frame (ns)")
+    ax.set_ylabel("t_B mod frame (ns)")
+    ax.set_title(
+        f"CV JTI | k={k}, fine_bin={fine_bin_ps}ps, window={k * fine_bin_ps}ps\n"
+        f"origin={frame_origin_ps:.1f}ps, pairs={total_pairs:,}"
+    )
+    plt.colorbar(im, ax=ax, label="Counts")
     fig.tight_layout()
-    fig.savefig(str(path))
+    fig.savefig(path)
     plt.close(fig)
 
 
-def _iter_frame_origins(start_ps: float, stop_ps: float, step_ps: float) -> list[float]:
-    if step_ps <= 0:
-        raise ValueError("frame_origin_step_ps must be positive")
-    if stop_ps < start_ps:
-        raise ValueError("frame_origin_stop_ps must be >= frame_origin_start_ps")
-
-    values: list[float] = []
-    current = float(start_ps)
-    tolerance = abs(step_ps) * 1e-9 + 1e-12
-    while current <= stop_ps + tolerance:
-        values.append(float(round(current, 12)))
-        current += step_ps
-    return values
-
-
-def _select_best_frame_origin(rows: list[dict]) -> dict:
-    if not rows:
-        raise ValueError("frame-origin scan rows must not be empty")
-
-    def _key(row: dict) -> tuple[float, float, float, float]:
-        return (
-            float(row["diag_main_fraction"]),
-            -float(row["diag_pm1_fraction"]),
-            float(row["diag_contrast"]),
-            -float(row["frame_origin_ps"]),
-        )
-
-    best = max(rows, key=_key)
-    return {
-        "best_frame_origin_ps": float(best["frame_origin_ps"]),
-        "selection_rule": (
-            "maximize diag_main_fraction; then minimize diag_pm1_fraction; "
-            "then maximize diag_contrast; then choose the smallest frame_origin_ps"
-        ),
-        "dimension": int(best["dimension"]),
-        "bin_width_ps": int(best["bin_width_ps"]),
-        "best_diag_main_fraction": float(best["diag_main_fraction"]),
-        "best_diag_pm1_fraction": float(best["diag_pm1_fraction"]),
-        "best_diag_contrast": float(best["diag_contrast"]),
-    }
-
-
-def _counts_for_frame_origin(
-    timetags: _RawTimetags,
+def _save_dv_png(
+    path: Path,
+    dv: np.ndarray,
     *,
-    bin_width_ps: int,
-    frame_bins: int,
+    k: int,
+    binwidth_ps: int,
+    dimension: int,
     frame_origin_ps: float,
-    logical_ch_a: int,
-    logical_ch_b: int,
-    pairing_mode: str = "strict_single_hit_per_frame",
-    coincidence_window_ps: int = 200,
-) -> tuple[np.ndarray, dict, dict[str, float]]:
-    if str(pairing_mode) == "strict_single_hit_per_frame":
-        pairs, pairs_meta = _pairs_from_timetags(
-            timetags,
-            bin_width_ps=int(bin_width_ps),
-            frame_bins=int(frame_bins),
-            frame_origin_ps=float(frame_origin_ps),
-            logical_ch_a=logical_ch_a,
-            logical_ch_b=logical_ch_b,
-        )
-        counts = _jti_from_pairs(pairs, n_bins=int(frame_bins))
-    else:
-        counts, pairs_meta = _window_counts_from_timetags(
-            timetags,
-            bin_width_ps=int(bin_width_ps),
-            frame_bins=int(frame_bins),
-            frame_origin_ps=float(frame_origin_ps),
-            logical_ch_a=logical_ch_a,
-            logical_ch_b=logical_ch_b,
-            pairing_mode=str(pairing_mode),
-            coincidence_window_ps=int(coincidence_window_ps),
-        )
-    diagnostics = compute_jti_diagnostics(counts)
-    return counts, pairs_meta, diagnostics
+    total_pairs: int,
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        raise RuntimeError(f"matplotlib required for PNG output: {exc}") from exc
+
+    extent = [0, dimension * binwidth_ps / 1000.0, 0, dimension * binwidth_ps / 1000.0]
+
+    fig, ax = plt.subplots(figsize=(8, 7), dpi=150)
+    im = ax.imshow(
+        dv,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        interpolation="nearest",
+    )
+    ax.set_xlabel("t_A bin index")
+    ax.set_ylabel("t_B bin index")
+    ax.set_title(
+        f"DV JTI | k={k}, bw={binwidth_ps}ps, dim={dimension}\n"
+        f"origin={frame_origin_ps:.1f}ps, pairs={total_pairs:,}"
+    )
+    plt.colorbar(im, ax=ax, label="Counts")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
-def _optional_analysis_outputs(
-    counts: np.ndarray,
-    *,
-    background_subtract: bool,
-    peak_align: bool,
-    align_mode: str,
-    normalize: str,
-) -> tuple[dict, dict]:
-    analysis_options = {
-        "background_subtract": bool(background_subtract),
-        "peak_align": bool(peak_align),
-        "align_mode": str(align_mode),
-        "normalize": str(normalize),
-    }
-    if not background_subtract and not peak_align and str(normalize).lower() in {"none", ""}:
-        return analysis_options, {}
+def _save_scan_csv(path: Path, rows: list[dict]) -> None:
+    if not rows:
+        return
+    fieldnames = list(rows[0].keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in rows:
+            w.writerow(row)
 
-    accidentals = np.zeros_like(counts)
-    corrected = counts.copy()
-    if background_subtract:
-        corrected, accidentals = _accidentals_subtract(counts)
 
-    peak = None
-    shift = (0, 0)
-    aligned = corrected
-    if peak_align:
-        aligned, peak, shift = _peak_align_to_center(corrected, mode=align_mode)
+def _save_summary_csv(path: Path, summaries: list[dict]) -> None:
+    if not summaries:
+        return
+    fieldnames = list(summaries[0].keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in summaries:
+            w.writerow(row)
 
-    normalized = _normalize(aligned, normalize)
-    return analysis_options, {
-        "jti_accidentals": accidentals.astype(np.float64),
-        "jti_corrected": corrected.astype(np.float64),
-        "jti_aligned": aligned.astype(np.float64),
-        "jti_normalized": normalized.astype(np.float64),
-        "peak_index_before_align": peak,
-        "shift_bins": {"signal": int(shift[0]), "idler": int(shift[1])},
-    }
 
+# ---------------------------------------------------------------------------
+# Main extraction logic
+# ---------------------------------------------------------------------------
 
 def run_extract(
     *,
-    data_dir: Path,
-    ttbin: Path | None,
-    binwidth_ps: Iterable[int],
-    dimensions: Iterable[int],
-    frame_origin_ps: float,
+    ttbin: Path,
+    raw_ch_a_id: int,
+    raw_ch_b_id: int,
+    binwidth_ps: int,
+    dimension: int,
+    fine_bins: list[int],
+    k_values: list[int],
     scan_frame_origin: bool,
+    frame_origin_ps: float,
     frame_origin_start_ps: float,
     frame_origin_stop_ps: float | None,
     frame_origin_step_ps: float,
+    band_bins: int,
+    accidental_delay_mult: int,
     out_dir: Path,
     quiet: bool,
     max_events: int | None,
-    raw_ch_a_id: int,
-    raw_ch_b_id: int,
-    logical_ch_a: int,
-    logical_ch_b: int,
-    prefer_ttbin: bool,
-    background_subtract: bool,
-    peak_align: bool,
-    align_mode: str,
-    normalize: str,
     save_csv: bool,
-    save_npz: bool,
-    plot: bool,
-    prefix: str,
-    pairing_mode: str = "strict_single_hit_per_frame",
-    coincidence_window_ps: int = 200,
-    plot_diagonal_profile: bool = False,
-    diagonal_profile_band_bins: int = 1,
+    save_png: bool,
+    svd_unwrapped: bool = True,
+    guard_bins: int = 2,
+    tau0_ps: int = 0,
 ) -> dict:
+    """Main JTI extraction entry point with CV/DV/SVD unwrapped output."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load timetags
     timetags, resolved_ttbin, input_source = _load_timetags(
-        data_dir=data_dir,
         ttbin=ttbin,
-        prefer_ttbin=prefer_ttbin,
         max_events=max_events,
         raw_ch_a_id=raw_ch_a_id,
         raw_ch_b_id=raw_ch_b_id,
-        logical_ch_a=logical_ch_a,
-        logical_ch_b=logical_ch_b,
+        logical_ch_a=0,
+        logical_ch_b=1,
     )
 
-    binwidth_values = [int(x) for x in binwidth_ps]
-    dimension_values = [int(x) for x in dimensions]
-    if scan_frame_origin and (len(binwidth_values) != 1 or len(dimension_values) != 1):
-        raise SystemExit(
-            "--scan-frame-origin only supports a single --binwidth-ps value and a single --dimensions value."
-        )
-    if scan_frame_origin and frame_origin_step_ps <= 0:
-        raise SystemExit("--frame-origin-step-ps must be positive when --scan-frame-origin is enabled.")
-
-    outputs: list[dict] = []
-    for bw in binwidth_values:
-        for dim in dimension_values:
-            frame_bins = int(dim)
-            stem = f"{prefix}jti_dim{int(dim)}_bw{int(bw)}ps"
-            scan_csv_path = None
-            scan_best_path = None
-            best_frame_origin_payload = None
-            best_counts_csv_path = None
-
-            if scan_frame_origin:
-                stop_ps = float(frame_origin_stop_ps if frame_origin_stop_ps is not None else bw)
-                scan_rows: list[dict] = []
-                for t0 in _iter_frame_origins(float(frame_origin_start_ps), stop_ps, float(frame_origin_step_ps)):
-                    scan_counts, scan_pairs_meta, scan_diag = _counts_for_frame_origin(
-                        timetags,
-                        bin_width_ps=int(bw),
-                        frame_bins=frame_bins,
-                        frame_origin_ps=float(t0),
-                        logical_ch_a=logical_ch_a,
-                        logical_ch_b=logical_ch_b,
-                        pairing_mode=str(pairing_mode),
-                        coincidence_window_ps=int(coincidence_window_ps),
-                    )
-                    scan_rows.append(
-                        {
-                            "frame_origin_ps": float(t0),
-                            "dimension": int(dim),
-                            "bin_width_ps": int(bw),
-                            "n_pairs": int(scan_pairs_meta["n_pairs"]),
-                            **scan_diag,
-                        }
-                    )
-
-                scan_csv_path = out_dir / f"{stem}.frame_origin_scan.csv"
-                _save_frame_origin_scan_csv(scan_csv_path, scan_rows)
-                best_frame_origin_payload = _select_best_frame_origin(scan_rows)
-                scan_best_path = out_dir / f"{stem}.frame_origin_scan_best.json"
-                scan_best_path.write_text(
-                    json.dumps(best_frame_origin_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-
-            counts, pairs_meta, diagnostics = _counts_for_frame_origin(
-                timetags,
-                bin_width_ps=int(bw),
-                frame_bins=frame_bins,
-                frame_origin_ps=float(frame_origin_ps),
-                logical_ch_a=logical_ch_a,
-                logical_ch_b=logical_ch_b,
-                pairing_mode=str(pairing_mode),
-                coincidence_window_ps=int(coincidence_window_ps),
-            )
-            analysis_options, analysis_arrays = _optional_analysis_outputs(
-                counts,
-                background_subtract=background_subtract,
-                peak_align=peak_align,
-                align_mode=align_mode,
-                normalize=normalize,
-            )
-
-            meta_path = out_dir / f"{stem}.meta.json"
-            npz_path = None
-            diagonal_profile_csv_path = None
-            diagonal_profile_png_path = None
-            diagonal_profile = None
-            if plot_diagonal_profile:
-                diagonal_profile = diagonal_coincidence_profile(counts, band_bins=int(diagonal_profile_band_bins))
-                diagonal_profile_csv_path = out_dir / f"{stem}.diagonal_profile.csv"
-                diagonal_profile_png_path = out_dir / f"{stem}.diagonal_profile.png"
-                _save_diagonal_profile_csv(diagonal_profile_csv_path, diagonal_profile, bin_width_ps=int(bw))
-                _plot_diagonal_profile_png(
-                    diagonal_profile_png_path,
-                    diagonal_profile,
-                    bin_width_ps=int(bw),
-                    band_bins=int(diagonal_profile_band_bins),
-                    title=stem,
-                )
-            if save_npz:
-                npz_payload: dict[str, object] = {
-                    "jti_counts": counts.astype(np.float64),
-                    "dimension": np.int64(int(dim)),
-                    "bin_width_ps": np.int64(int(bw)),
-                    "frame_origin_ps": np.float64(float(frame_origin_ps)),
-                }
-                if diagonal_profile is not None:
-                    npz_payload["diagonal_profile"] = diagonal_profile.astype(np.float64)
-                    npz_payload["diagonal_profile_band_bins"] = np.int64(int(diagonal_profile_band_bins))
-                for key, value in analysis_arrays.items():
-                    if isinstance(value, np.ndarray):
-                        npz_payload[key] = value
-                npz_path = out_dir / f"{stem}.npz"
-                np.savez_compressed(str(npz_path), **npz_payload)
-
-            meta = {
-                "dimension": int(dim),
-                "bin_width_ps": int(bw),
-                "frame_duration_ps": float(int(dim) * int(bw)),
-                "frame_origin_ps": float(frame_origin_ps),
-                "n_pairs": int(pairs_meta["n_pairs"]),
-                "pairing_mode": str(pairing_mode),
-                "coincidence_window_ps": int(coincidence_window_ps) if str(pairing_mode) != "strict_single_hit_per_frame" else None,
-                "single_hit_policy": "strict_single_hit_per_frame" if str(pairing_mode) == "strict_single_hit_per_frame" else "not_applicable",
-                "raw_ch_a_id": int(raw_ch_a_id),
-                "raw_ch_b_id": int(raw_ch_b_id),
-                "logical_ch_a": int(logical_ch_a),
-                "logical_ch_b": int(logical_ch_b),
-                "input_source": str(input_source),
-                "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
-                "scan_frame_origin_enabled": bool(scan_frame_origin),
-                "diagnostics": diagnostics,
-                "pairs_meta": pairs_meta,
-                "timetags": {
-                    "acquisition_duration_s": timetags.acquisition_duration_s,
-                    "acquisition_duration_source": timetags.acquisition_duration_source,
-                },
-            }
-            if diagonal_profile_csv_path is not None and diagonal_profile_png_path is not None:
-                meta["diagonal_profile"] = {
-                    "band_bins": int(diagonal_profile_band_bins),
-                    "csv": str(diagonal_profile_csv_path),
-                    "png": str(diagonal_profile_png_path),
-                }
-            if scan_csv_path is not None and scan_best_path is not None:
-                meta["frame_origin_scan_csv"] = str(scan_csv_path)
-                meta["frame_origin_scan_best_json"] = str(scan_best_path)
-            if best_frame_origin_payload is not None:
-                best_counts, best_pairs_meta, best_diagnostics = _counts_for_frame_origin(
-                    timetags,
-                    bin_width_ps=int(bw),
-                    frame_bins=frame_bins,
-                    frame_origin_ps=float(best_frame_origin_payload["best_frame_origin_ps"]),
-                    logical_ch_a=logical_ch_a,
-                    logical_ch_b=logical_ch_b,
-                    pairing_mode=str(pairing_mode),
-                    coincidence_window_ps=int(coincidence_window_ps),
-                )
-                best_counts_csv_path = out_dir / f"{stem}.best_frame_origin.counts.csv"
-                if save_csv:
-                    _save_csv_matrix(best_counts_csv_path, best_counts)
-                meta["best_frame_origin_result"] = {
-                    "frame_origin_ps": float(best_frame_origin_payload["best_frame_origin_ps"]),
-                    "counts_csv": str(best_counts_csv_path) if save_csv else None,
-                    "n_pairs": int(best_pairs_meta["n_pairs"]),
-                    "diagnostics": best_diagnostics,
-                }
-            if analysis_options["background_subtract"] or analysis_options["peak_align"] or analysis_options["normalize"].lower() != "none":
-                optional_postprocess = dict(analysis_options)
-                if "peak_index_before_align" in analysis_arrays:
-                    optional_postprocess["peak_index_before_align"] = analysis_arrays["peak_index_before_align"]
-                if "shift_bins" in analysis_arrays:
-                    optional_postprocess["shift_bins"] = analysis_arrays["shift_bins"]
-                meta["optional_postprocess"] = optional_postprocess
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-            if save_csv:
-                _save_csv_matrix(out_dir / f"{stem}.counts.csv", counts)
-            if plot:
-                _plot_png(
-                    out_dir / f"{stem}.png",
-                    counts,
-                    title=f"Discrete Joint Time-Bin Counts (dim={dim}, bw={bw}ps, t0={frame_origin_ps}ps)",
-                )
-
-            outputs.append(
-                {
-                    "dimension": int(dim),
-                    "bin_width_ps": int(bw),
-                    "frame_origin_ps": float(frame_origin_ps),
-                    "counts_csv": str(out_dir / f"{stem}.counts.csv") if save_csv else None,
-                    "best_frame_origin_counts_csv": str(best_counts_csv_path) if best_counts_csv_path is not None and save_csv else None,
-                    "meta": str(meta_path),
-                    "npz": str(npz_path) if npz_path is not None else None,
-                    "diagonal_profile_csv": str(diagonal_profile_csv_path) if diagonal_profile_csv_path is not None else None,
-                    "diagonal_profile_png": str(diagonal_profile_png_path) if diagonal_profile_png_path is not None else None,
-                    "frame_origin_scan_csv": str(scan_csv_path) if scan_csv_path is not None else None,
-                    "frame_origin_scan_best_json": str(scan_best_path) if scan_best_path is not None else None,
-                }
-            )
-            if not quiet:
-                if save_csv:
-                    print(str(out_dir / f"{stem}.counts.csv"))
-                    if best_counts_csv_path is not None:
-                        print(str(best_counts_csv_path))
-                print(str(meta_path))
-                if npz_path is not None:
-                    print(str(npz_path))
-                if diagonal_profile_csv_path is not None:
-                    print(str(diagonal_profile_csv_path))
-                if diagonal_profile_png_path is not None:
-                    print(str(diagonal_profile_png_path))
-                if scan_csv_path is not None:
-                    print(str(scan_csv_path))
-                if scan_best_path is not None:
-                    print(str(scan_best_path))
-
-    summary = {
-        "data_dir": str(data_dir),
-        "out_dir": str(out_dir),
-        "input_source": str(input_source),
-        "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
-        "binwidth_ps": binwidth_values,
-        "dimensions": dimension_values,
-        "frame_origin_ps": float(frame_origin_ps),
-        "pairing_mode": str(pairing_mode),
-        "coincidence_window_ps": int(coincidence_window_ps) if str(pairing_mode) != "strict_single_hit_per_frame" else None,
-        "scan_frame_origin_enabled": bool(scan_frame_origin),
-        "outputs": outputs,
-    }
-    summary_path = out_dir / f"{prefix}jti_summary.json"
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     if not quiet:
-        print(str(summary_path))
-    return summary
+        print(f"Loaded {timetags.TimeTag.size} events from {resolved_ttbin}")
+        print(f"binwidth_ps={binwidth_ps}, dimension={dimension}")
+        print(f"k_values={k_values}, fine_bins={fine_bins}")
 
+    frame_period_ps = dimension * binwidth_ps
+    summary_rows: list[dict] = []
 
-def _self_test_counts_and_diagnostics() -> None:
-    counts = _jti_from_pairs(np.asarray([(0, 0), (1, 1), (2, 2)], dtype=np.int64), n_bins=4)
-    assert float(np.trace(counts)) == 3.0, "main diagonal sum should be 3"
+    for k in k_values:
+        window_ps = k * binwidth_ps
+        if not quiet:
+            print(f"\n--- k={k}, window_ps={window_ps} ---")
 
-    counts_pm1 = _jti_from_pairs(np.asarray([(0, 1), (1, 2), (2, 3)], dtype=np.int64), n_bins=4)
-    diag = compute_jti_diagnostics(counts_pm1)
-    assert diag["diag_pm1_sum"] == 3.0, "pm1 diagonal sum should be 3"
-
-
-def _self_test_frame_origin_scan() -> None:
-    timetags = _RawTimetags(
-        Ch=np.asarray([0.0, 1.0, 0.0, 1.0], dtype=float),
-        TimeTag=np.asarray([10, 20, 110, 120], dtype=np.int64),
-        overflow_types=None,
-        missed_events=None,
-        acquisition_duration_s=None,
-        acquisition_duration_source=None,
-    )
-    out_dir = Path(__file__).resolve().parent / ".selftest_tmp"
-    out_dir.mkdir(exist_ok=True)
-    try:
-        rows: list[dict] = []
-        for t0 in _iter_frame_origins(0.0, 50.0, 25.0):
-            pairs, pairs_meta = _pairs_from_timetags(
+        if scan_frame_origin:
+            scan_result = _scan_frame_origin(
                 timetags,
-                bin_width_ps=50,
-                frame_bins=4,
-                frame_origin_ps=t0,
+                k=k,
+                binwidth_ps=binwidth_ps,
+                dimension=dimension,
+                band_bins=band_bins,
                 logical_ch_a=0,
                 logical_ch_b=1,
+                accidental_delay_mult=accidental_delay_mult,
+                origin_start_ps=frame_origin_start_ps,
+                origin_stop_ps=frame_origin_stop_ps,
+                origin_step_ps=frame_origin_step_ps,
+                quiet=quiet,
             )
-            rows.append(
-                {
-                    "frame_origin_ps": t0,
-                    "dimension": 4,
-                    "bin_width_ps": 50,
-                    "n_pairs": int(pairs_meta["n_pairs"]),
-                    **compute_jti_diagnostics(_jti_from_pairs(pairs, n_bins=4)),
-                }
+            best_origin = scan_result.best_frame_origin_ps
+
+            # Save scan CSV
+            scan_csv_path = out_dir / f"frame_origin_scan_k{k}.csv"
+            _save_scan_csv(scan_csv_path, scan_result.scan_rows)
+            if not quiet:
+                print(f"  Saved scan CSV: {scan_csv_path}")
+        else:
+            best_origin = frame_origin_ps
+            scan_result = None
+
+        # Find coincidence pairs
+        result = _find_coincidence_pairs(
+            timetags,
+            window_ps=window_ps,
+            logical_ch_a=0,
+            logical_ch_b=1,
+        )
+
+        # Find accidentals pairs
+        delay_ps = frame_period_ps * accidental_delay_mult
+        acc_result = _find_coincidence_pairs_with_delay(
+            timetags,
+            window_ps=window_ps,
+            logical_ch_a=0,
+            logical_ch_b=1,
+            delay_ps=delay_ps,
+        )
+
+        total_pairs = int(result.t_a_paired.size)
+        acc_pairs = int(acc_result.t_a_paired.size)
+        accidental_fraction = acc_pairs / total_pairs if total_pairs > 0 else 0.0
+
+        if not quiet:
+            print(f"  pairs={total_pairs:,}, acc_pairs={acc_pairs:,}, acc_fraction={accidental_fraction:.4f}")
+
+        # Generate CV outputs for each fine_bin
+        for fine_bin_ps in fine_bins:
+            n_cv_bins = frame_period_ps // fine_bin_ps
+            cv = _compute_cv_histogram(
+                result.t_a_paired,
+                result.t_b_paired,
+                frame_period_ps=frame_period_ps,
+                fine_bin_ps=fine_bin_ps,
+                frame_origin_ps=best_origin,
             )
 
-        csv_path = out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan.csv"
-        best_path = out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan_best.json"
-        _save_frame_origin_scan_csv(csv_path, rows)
-        best_path.write_text(json.dumps(_select_best_frame_origin(rows), ensure_ascii=False, indent=2), encoding="utf-8")
-        assert csv_path.exists(), "scan CSV should be created"
-        assert best_path.exists(), "scan best JSON should be created"
-        assert "frame_origin_ps" in csv_path.read_text(encoding="utf-8")
-        assert "best_frame_origin_ps" in json.loads(best_path.read_text(encoding="utf-8"))
-    finally:
-        for path in [out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan.csv", out_dir / "toy_jti_dim4_bw50ps.frame_origin_scan_best.json"]:
-            if path.exists():
-                path.unlink()
-        if out_dir.exists():
-            out_dir.rmdir()
+            cv_diag = compute_jti_diagnostics(cv, band_bins=band_bins)
+
+            if save_csv:
+                cv_csv_path = out_dir / f"cv_fine{fine_bin_ps}ps_k{k}.csv"
+                _save_csv_matrix(cv_csv_path, cv)
+                if not quiet:
+                    print(f"  Saved CV CSV: {cv_csv_path}")
+
+            if save_png:
+                cv_png_path = out_dir / f"cv_fine{fine_bin_ps}ps_k{k}.png"
+                _save_cv_png(
+                    cv_png_path,
+                    cv,
+                    k=k,
+                    fine_bin_ps=fine_bin_ps,
+                    frame_period_ps=frame_period_ps,
+                    frame_origin_ps=best_origin,
+                    total_pairs=total_pairs,
+                )
+                if not quiet:
+                    print(f"  Saved CV PNG: {cv_png_path}")
+
+            # Save CV meta
+            cv_meta = {
+                "pairing_mode": "all_pairs_window",
+                "allows_event_reuse": True,
+                "purpose": "diagnostic_cv_dv_extraction",
+                "k": k,
+                "window_ps": window_ps,
+                "fine_bin_ps": fine_bin_ps,
+                "cv_bins": int(n_cv_bins),
+                "frame_period_ps": frame_period_ps,
+                "frame_origin_ps": best_origin,
+                "total_pairs": total_pairs,
+                "accidental_pairs": acc_pairs,
+                "accidental_fraction": accidental_fraction,
+                "accidental_delay_ps": delay_ps,
+                "band_bins": band_bins,
+                "diagnostics": cv_diag,
+                "input_source": str(input_source),
+                "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
+            }
+            cv_meta_path = out_dir / f"cv_fine{fine_bin_ps}ps_k{k}.meta.json"
+            cv_meta_path.write_text(json.dumps(cv_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Generate DV output
+        dv = _compute_dv_matrix(
+            result.t_a_paired,
+            result.t_b_paired,
+            dimension=dimension,
+            binwidth_ps=binwidth_ps,
+            frame_origin_ps=best_origin,
+        )
+
+        dv_diag = compute_jti_diagnostics(dv, band_bins=band_bins)
+
+        if save_csv:
+            dv_csv_path = out_dir / f"dv_k{k}_bw{binwidth_ps}ps_dim{dimension}.csv"
+            _save_csv_matrix(dv_csv_path, dv)
+            if not quiet:
+                print(f"  Saved DV CSV: {dv_csv_path}")
+
+        if save_png:
+            dv_png_path = out_dir / f"dv_k{k}_bw{binwidth_ps}ps_dim{dimension}.png"
+            _save_dv_png(
+                dv_png_path,
+                dv,
+                k=k,
+                binwidth_ps=binwidth_ps,
+                dimension=dimension,
+                frame_origin_ps=best_origin,
+                total_pairs=total_pairs,
+            )
+            if not quiet:
+                print(f"  Saved DV PNG: {dv_png_path}")
+
+        # Save DV meta
+        dv_meta = {
+            "pairing_mode": "all_pairs_window",
+            "allows_event_reuse": True,
+            "purpose": "diagnostic_cv_dv_extraction",
+            "k": k,
+            "window_ps": window_ps,
+            "binwidth_ps": binwidth_ps,
+            "dimension": dimension,
+            "frame_period_ps": frame_period_ps,
+            "frame_origin_ps": best_origin,
+            "total_pairs": total_pairs,
+            "accidental_pairs": acc_pairs,
+            "accidental_fraction": accidental_fraction,
+            "accidental_delay_ps": delay_ps,
+            "band_bins": band_bins,
+            "diagnostics": dv_diag,
+            "input_source": str(input_source),
+            "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
+        }
+        dv_meta_path = out_dir / f"dv_k{k}_bw{binwidth_ps}ps_dim{dimension}.meta.json"
+        dv_meta_path.write_text(json.dumps(dv_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Generate SVD unwrapped edge-guarded output (if enabled)
+        svd_kept_pairs = 0
+        svd_kept_fraction = 0.0
+        svd_cross_frame_fraction = 0.0
+        svd_edge_rejected_fraction = 0.0
+
+        if svd_unwrapped:
+            svd_matrix, svd_meta = _compute_unwrapped_edge_guarded_jti(
+                result.t_a_paired,
+                result.t_b_paired,
+                binwidth_ps=binwidth_ps,
+                dim=dimension,
+                origin_ps=int(round(best_origin)),
+                tau0_ps=tau0_ps,
+                guard_bins=guard_bins,
+            )
+
+            svd_kept_pairs = svd_meta["kept_pairs"]
+            svd_kept_fraction = svd_meta["kept_fraction_of_raw_pairs"]
+            svd_cross_frame_fraction = svd_meta["cross_frame_fraction"]
+            svd_edge_rejected_fraction = svd_meta["edge_rejected_fraction"]
+
+            if save_csv:
+                svd_csv_path = out_dir / f"svd_jti_unwrapped_guarded_k{k}_bw{binwidth_ps}ps_dim{dimension}.csv"
+                _save_csv_matrix(svd_csv_path, svd_matrix)
+                if not quiet:
+                    print(f"  Saved SVD CSV: {svd_csv_path}")
+
+            if save_png:
+                svd_png_path = out_dir / f"svd_jti_unwrapped_guarded_k{k}_bw{binwidth_ps}ps_dim{dimension}.png"
+                _save_dv_png(
+                    svd_png_path,
+                    svd_matrix,
+                    k=k,
+                    binwidth_ps=binwidth_ps,
+                    dimension=dimension,
+                    frame_origin_ps=best_origin,
+                    total_pairs=svd_kept_pairs,
+                )
+                if not quiet:
+                    print(f"  Saved SVD PNG: {svd_png_path}")
+
+            # Save SVD meta
+            svd_meta_full = {
+                "mode": "unwrapped_edge_guarded_noncyclic",
+                "pairing_mode": "all_pairs_window",
+                "allows_event_reuse": True,
+                "allows_wraparound": False,
+                "intended_use": "Schmidt-like SVD / non-cyclic finite-window JTI",
+                "k": k,
+                "window_ps": window_ps,
+                "binwidth_ps": binwidth_ps,
+                "dim": dimension,
+                "frame_period_ps": frame_period_ps,
+                "origin_ps": int(round(best_origin)),
+                "tau0_ps": tau0_ps,
+                "guard_bins": guard_bins,
+                "guard_ps": guard_bins * binwidth_ps,
+                **svd_meta,
+                "diagnostics": compute_jti_diagnostics(svd_matrix, band_bins=band_bins),
+                "input_source": str(input_source),
+                "resolved_ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
+            }
+            svd_meta_path = out_dir / f"svd_jti_unwrapped_guarded_k{k}_bw{binwidth_ps}ps_dim{dimension}.meta.json"
+            svd_meta_path.write_text(json.dumps(svd_meta_full, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            if not quiet:
+                print(f"  SVD unwrapped: kept={svd_kept_pairs:,} ({svd_kept_fraction:.4f}), "
+                      f"cross_frame={svd_cross_frame_fraction:.4f}, edge_rejected={svd_edge_rejected_fraction:.4f}")
+
+        # Add to summary
+        score = _compute_score(dv_diag["diag_band_fraction"], accidental_fraction)
+        summary_rows.append({
+            "k": k,
+            "window_ps": window_ps,
+            "best_frame_origin_ps": best_origin,
+            "total_pairs": total_pairs,
+            "accidental_pairs": acc_pairs,
+            "accidental_fraction": accidental_fraction,
+            "diag_main_fraction": dv_diag["diag_main_fraction"],
+            "diag_pm1_fraction": dv_diag["diag_pm1_fraction"],
+            "diag_band_fraction": dv_diag["diag_band_fraction"],
+            "offdiag_fraction": dv_diag["offdiag_fraction"],
+            "diag_contrast": dv_diag["diag_contrast"],
+            "score": score,
+            "svd_kept_pairs": svd_kept_pairs,
+            "svd_kept_fraction": svd_kept_fraction,
+            "svd_cross_frame_fraction": svd_cross_frame_fraction,
+            "svd_edge_rejected_fraction": svd_edge_rejected_fraction,
+            "svd_guard_bins": guard_bins if svd_unwrapped else None,
+        })
+
+    # Save summary CSV
+    summary_csv_path = out_dir / "summary_k_scan.csv"
+    _save_summary_csv(summary_csv_path, summary_rows)
+    if not quiet:
+        print(f"\nSaved summary: {summary_csv_path}")
+
+    # Save overall summary JSON
+    summary_json = {
+        "ttbin": str(resolved_ttbin) if resolved_ttbin is not None else None,
+        "input_source": str(input_source),
+        "raw_ch_a_id": raw_ch_a_id,
+        "raw_ch_b_id": raw_ch_b_id,
+        "binwidth_ps": binwidth_ps,
+        "dimension": dimension,
+        "frame_period_ps": frame_period_ps,
+        "fine_bins": fine_bins,
+        "k_values": k_values,
+        "band_bins": band_bins,
+        "accidental_delay_mult": accidental_delay_mult,
+        "scan_frame_origin": scan_frame_origin,
+        "svd_unwrapped": svd_unwrapped,
+        "guard_bins": guard_bins,
+        "tau0_ps": tau0_ps,
+        "summary": summary_rows,
+    }
+    summary_json_path = out_dir / "extraction_summary.json"
+    summary_json_path.write_text(json.dumps(summary_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return summary_json
 
 
-def _run_self_tests() -> None:
-    _self_test_counts_and_diagnostics()
-    _self_test_frame_origin_scan()
-    print("self-test passed")
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description=(
-            "Extract a discrete joint time-bin coincidence matrix in the arrival-time basis "
-            "from pre-aligned timetag data."
-        ),
+        description="JTI extraction with CV/DV/SVD unwrapped output.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Example:\n"
-            "  python extract_jti.py --data \"<path/to/dataset>\" --binwidth-ps 200 "
-            "--dimensions 32 --frame-origin-ps 0 --out results/jti_out\n"
+            "  python -m jti_extract.cli.extract \\\n"
+            "    --ttbin 'path/to/data.ttbin' \\\n"
+            "    --raw-ch-a-id 1 --raw-ch-b-id 3 \\\n"
+            "    --binwidth-ps 50 --dimensions 128 \\\n"
+            "    --fine-bins 5 --k-values 1 \\\n"
+            "    --scan-frame-origin --svd-unwrapped \\\n"
+            "    --out 'path/to/output'\n"
         ),
     )
-    ap.add_argument("--data", required=False, help="Dataset directory (also used to search parsed_timebin_data.npz).")
-    ap.add_argument("--ttbin", default=None, help="Optional: explicit *.ttbin file path (Windows or WSL).")
-    ap.add_argument("--prefer-ttbin", action="store_true", help="Prefer reading *.ttbin even if parsed_timebin_data.npz exists.")
-    ap.add_argument("--max-events", type=int, default=None, help="Optional: stop reading after this many events (debug/perf).")
-    ap.add_argument("--raw-ch-a-id", type=int, default=1, help="TimeTagger raw channel id for signal/A channel (default: 1).")
-    ap.add_argument("--raw-ch-b-id", type=int, default=2, help="TimeTagger raw channel id for idler/B channel (default: 2).")
-    ap.add_argument("--ch-a", type=int, default=0, help="Logical channel value for signal/A in parsed data (default: 0).")
-    ap.add_argument("--ch-b", type=int, default=1, help="Logical channel value for idler/B in parsed data (default: 1).")
-    ap.add_argument("--binwidth-ps", default="100", help="Comma-separated bin widths in ps.")
-    ap.add_argument("--dimensions", default="16", help="Comma-separated dimensions (also used as frame bins per axis).")
-    ap.add_argument("--frame-origin-ps", type=float, default=0.0, help="Common time origin t0 in ps for discrete time-bin mapping.")
-    ap.add_argument(
-        "--pairing-mode",
-        default="strict_single_hit_per_frame",
-        choices=["strict_single_hit_per_frame", "nearest_window", "greedy_unique_window", "all_pairs_window"],
-        help="Event pairing mode before accumulating the JTI counts matrix.",
-    )
-    ap.add_argument("--coincidence-window-ps", type=int, default=200, help="Coincidence window in ps for *_window pairing modes.")
-    ap.add_argument("--scan-frame-origin", action="store_true", help="Scan frame-origin candidates and export diagonal diagnostics.")
-    ap.add_argument("--frame-origin-start-ps", type=float, default=0.0, help="Start value for frame-origin scan in ps.")
-    ap.add_argument("--frame-origin-stop-ps", type=float, default=None, help="Stop value for frame-origin scan in ps. Defaults to the selected bin width.")
-    ap.add_argument("--frame-origin-step-ps", type=float, default=5.0, help="Step size for frame-origin scan in ps.")
-    ap.add_argument("--out", default=None, help="Output directory (default: the ttbin folder if available; otherwise --data).")
-    ap.add_argument("--no-csv", action="store_true", help="Disable CSV export (CSV counts are the default output format).")
-    ap.add_argument("--npz", action="store_true", help="Also save NPZ with jti_counts and optional analysis arrays.")
-    ap.add_argument("--plot", action="store_true", help="Also save a heatmap PNG derived from raw counts.")
-    ap.add_argument("--plot-diagonal-profile", action="store_true", help="Also save a CSV and PNG of coincidence counts along the diagonal direction.")
-    ap.add_argument("--diagonal-profile-band-bins", type=int, default=1, help="Half-width in bins for diagonal profile summation, default 1.")
-    ap.add_argument("--background-subtract", action="store_true", help="Optional analysis mode for NPZ/meta only. Does not change counts.csv.")
-    ap.add_argument("--peak-align", action="store_true", help="Optional analysis mode for NPZ/meta only. Does not change counts.csv.")
-    ap.add_argument("--no-bg", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--no-align", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--align-mode", default="roll", choices=["roll", "pad", "tile"], help="Optional analysis mode used with --peak-align.")
-    ap.add_argument("--normalize", default="none", choices=["none", "sum", "max", "diagmax"], help="Optional analysis normalization for NPZ/meta only.")
-    ap.add_argument("--prefix", default="", help="Prefix for output filenames, e.g. 'run1_'.")
+    ap.add_argument("--ttbin", required=True, help="Path to .ttbin file.")
+    ap.add_argument("--raw-ch-a-id", type=int, default=1, help="TimeTagger raw channel id for A (default: 1).")
+    ap.add_argument("--raw-ch-b-id", type=int, default=3, help="TimeTagger raw channel id for B (default: 3).")
+    ap.add_argument("--binwidth-ps", type=int, default=10, help="Bin width in ps for DV output (default: 10).")
+    ap.add_argument("--dimensions", type=int, default=128, help="Dimension for DV output (default: 128).")
+    ap.add_argument("--fine-bins", default="5", help="Comma-separated fine bin widths in ps for CV output (default: 5).")
+    ap.add_argument("--k-values", default="1", help="Comma-separated k values for window = k * binwidth (default: 1).")
+    ap.add_argument("--scan-frame-origin", action="store_true", help="Scan frame_origin and select best.")
+    ap.add_argument("--frame-origin-ps", type=float, default=0.0, help="Fixed frame_origin_ps (used when not scanning).")
+    ap.add_argument("--frame-origin-start-ps", type=float, default=0.0, help="Start for frame_origin scan.")
+    ap.add_argument("--frame-origin-stop-ps", type=float, default=None, help="Stop for frame_origin scan (default: binwidth_ps).")
+    ap.add_argument("--frame-origin-step-ps", type=float, default=1.0, help="Step for frame_origin scan (default: 1ps).")
+    ap.add_argument("--band-bins", type=int, default=1, help="Half-width for diag band fraction (default: 1).")
+    ap.add_argument("--accidental-delay-mult", type=int, default=3, help="Frame periods for accidental delay (default: 3).")
+    ap.add_argument("--max-events", type=int, default=None, help="Max events to read (debug).")
+    ap.add_argument("--out", required=True, help="Output directory.")
+    ap.add_argument("--no-csv", action="store_true", help="Disable CSV output.")
+    ap.add_argument("--no-png", action="store_true", help="Disable PNG output.")
     ap.add_argument("--quiet", action="store_true", help="Suppress console output.")
-    ap.add_argument("--self-test", action="store_true", help="Run built-in toy validation and exit.")
+    ap.add_argument("--svd-unwrapped", action="store_true", default=True, help="Enable unwrapped edge-guarded JTI output for SVD/Schmidt analysis (default: enabled).")
+    ap.add_argument("--no-svd-unwrapped", dest="svd_unwrapped", action="store_false", help="Disable unwrapped edge-guarded JTI output.")
+    ap.add_argument("--guard-bins", type=int, default=2, help="Edge guard bins for unwrapped JTI (default: 2).")
+    ap.add_argument("--tau0-ps", type=int, default=0, help="B channel time offset in ps (default: 0).")
+
     args = ap.parse_args()
 
-    if np is None:  # pragma: no cover
+    if np is None:
         raise SystemExit(
-            f"numpy is missing in this Python environment ({sys.executable}). "
-            "Run with a Python that has numpy installed."
-        )
-    if args.self_test:
-        _run_self_tests()
-        return 0
-    if not args.data:
-        raise SystemExit("--data is required unless --self-test is used.")
-
-    data_dir = _normalize_path(args.data)
-    if not data_dir.exists():
-        raise SystemExit(f"data dir not found: {data_dir}")
-
-    ttbin = _normalize_path(args.ttbin) if args.ttbin else None
-    out_dir = Path(args.out) if args.out else None
-    if out_dir is None:
-        out_dir = (ttbin.parent if ttbin is not None else data_dir)
-
-    if (ttbin is not None or bool(args.prefer_ttbin)) and (int(args.ch_a) not in (0, 1) or int(args.ch_b) not in (0, 1)):
-        print(
-            "Warning: when reading *.ttbin, use --raw-ch-a-id/--raw-ch-b-id to select hardware channels; "
-            "--ch-a/--ch-b are logical labels after mapping (usually 0 and 1).",
-            file=sys.stderr,
+            f"numpy is missing ({sys.executable}). Install numpy first."
         )
 
-    background_subtract = bool(args.background_subtract) and not bool(args.no_bg)
-    peak_align = bool(args.peak_align) and not bool(args.no_align)
+    ttbin = _normalize_path(args.ttbin)
+    if not ttbin.exists():
+        raise SystemExit(f"ttbin not found: {ttbin}")
+
+    out_dir = _normalize_path(args.out)
+
+    try:
+        fine_bins = _parse_int_list(args.fine_bins)
+    except Exception:
+        raise SystemExit(f"Invalid --fine-bins: {args.fine_bins}")
+
+    try:
+        k_values = _parse_int_list(args.k_values)
+    except Exception:
+        raise SystemExit(f"Invalid --k-values: {args.k_values}")
 
     run_extract(
-        data_dir=data_dir,
         ttbin=ttbin,
-        binwidth_ps=_parse_int_list(args.binwidth_ps),
-        dimensions=_parse_int_list(args.dimensions),
-        frame_origin_ps=float(args.frame_origin_ps),
+        raw_ch_a_id=int(args.raw_ch_a_id),
+        raw_ch_b_id=int(args.raw_ch_b_id),
+        binwidth_ps=int(args.binwidth_ps),
+        dimension=int(args.dimensions),
+        fine_bins=fine_bins,
+        k_values=k_values,
         scan_frame_origin=bool(args.scan_frame_origin),
+        frame_origin_ps=float(args.frame_origin_ps),
         frame_origin_start_ps=float(args.frame_origin_start_ps),
         frame_origin_stop_ps=args.frame_origin_stop_ps,
         frame_origin_step_ps=float(args.frame_origin_step_ps),
+        band_bins=int(args.band_bins),
+        accidental_delay_mult=int(args.accidental_delay_mult),
         out_dir=out_dir,
         quiet=bool(args.quiet),
         max_events=args.max_events,
-        raw_ch_a_id=int(args.raw_ch_a_id),
-        raw_ch_b_id=int(args.raw_ch_b_id),
-        logical_ch_a=int(args.ch_a),
-        logical_ch_b=int(args.ch_b),
-        prefer_ttbin=bool(args.prefer_ttbin),
-        background_subtract=background_subtract,
-        peak_align=peak_align,
-        align_mode=str(args.align_mode),
-        normalize=str(args.normalize),
         save_csv=not bool(args.no_csv),
-        save_npz=bool(args.npz),
-        plot=bool(args.plot),
-        prefix=str(args.prefix or ""),
-        pairing_mode=str(args.pairing_mode),
-        coincidence_window_ps=int(args.coincidence_window_ps),
-        plot_diagonal_profile=bool(args.plot_diagonal_profile),
-        diagonal_profile_band_bins=int(args.diagonal_profile_band_bins),
+        save_png=not bool(args.no_png),
+        svd_unwrapped=bool(args.svd_unwrapped),
+        guard_bins=int(args.guard_bins),
+        tau0_ps=int(args.tau0_ps),
     )
+
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
