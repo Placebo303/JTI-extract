@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project provides tools for extracting Joint Time-bin Intensity (JTI) matrices from timetag data and computing Schmidt-like effective mode numbers. It supports two analysis modes:
+This project provides tools for extracting Joint Temporal Intensity (JTI) matrices from timetag data and computing Schmidt-like effective mode numbers. It supports two analysis modes:
 
 - **Mode A: Single-line JTI** — for ordinary single-peak SPDC JTI analysis.
 - **Mode B: BFC/FPC Multi-line JTI** — for biphoton frequency comb / fiber cavity multi-delay-peak structures.
