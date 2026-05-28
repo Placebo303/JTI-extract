@@ -1,47 +1,164 @@
-# Outputs
+# Output Files
 
-## JTI Counts CSV
+## Mode A: Single-line JTI Output
 
-`*.counts.csv` is a square matrix. The first row and first column are bin indices. Matrix cell `(i, j)` is the number of accepted pairs where channel A maps to bin `i` and channel B maps to bin `j`.
+### H_single_line.csv
 
-The accepted-pair semantics are recorded in `*.meta.json`:
+Square count matrix. First row and first column are bin indices. Cell `(i, j)` is the number of accepted pairs where channel A maps to bin `i` and channel B maps to bin `j`.
 
-- `strict_single_hit_per_frame`: only frames with exactly one hit in each channel.
-- `nearest_window`, `greedy_unique_window`, `all_pairs_window`: coincidence-window pairs folded into frame-local bins.
+### schmidt_single_line.json
 
-## JTI Meta JSON
+```json
+{
+  "analysis_mode": "single_line_jti",
+  "K_single_line_raw": 3.45,
+  "purity": 0.29,
+  "n_sv": 15,
+  "total_counts": 17267,
+  "kept_fraction": 0.94,
+  "cross_frame_fraction": 0.03,
+  "edge_rejected_fraction": 0.03,
+  "invalid_count": 0,
+  "residual_tau_diagnostics": {
+    "weighted_mean_residual_tau_ps": -50.0,
+    "weighted_std_residual_tau_ps": 80.0,
+    "offset_min_ps": -200,
+    "offset_max_ps": 200
+  },
+  "result_type": "background-unsubtracted intensity-based Schmidt-like effective mode number",
+  "strict_schmidt_number": false,
+  "uses_complex_phase": false,
+  "background_subtracted": false,
+  "amplitude_proxy": "sqrt(normalized_intensity)"
+}
+```
 
-`*.meta.json` records input source, dimensions, bin width, frame origin, pairing mode, coincidence window, pair counts, diagnostics, and optional analysis settings. Optional background subtraction, peak alignment, and normalization do not modify `*.counts.csv`.
+### singular_values.csv
 
-## Diagonal Profile CSV/PNG
+| Column | Description |
+|--------|-------------|
+| index | Singular value index |
+| singular_value | Singular value |
+| lambda | Normalized weight (s^2 / sum(s^2)) |
 
-When `--plot-diagonal-profile` is used, `jti-extract` writes:
+### meta.json
 
-- `*.diagonal_profile.csv`
-- `*.diagonal_profile.png`
+Full extraction metadata including tau0_ps, pair_center_ps, tau_align_ps, residual diagnostics, etc.
 
-The profile sums counts along the main-diagonal direction over `|j-i| <= --diagonal-profile-band-bins`. This is the recommended view when the JTI is a very narrow diagonal line.
+## Mode B: BFC/FPC Multi-line Output
 
-## JTI Summary JSON
+### schmidt_results.json
 
-`*jti_summary.json` lists run-level input/output paths, selected bin widths, dimensions, frame origin, scan flag, and generated files.
+Complete results with all K values, diagnostics, and metadata. Key fields:
 
-## Schmidt Summary CSV
+| Field | Description |
+|-------|-------------|
+| `analysis_mode` | "bfc_multiline_jti" |
+| `K_global_comb_raw` | Global K over selected comb-support ROI |
+| `K_comb_weight` | Effective number of retained comb components |
+| `K_full_window_greedy_unique_raw` | Operational one-to-one K over full delay range |
+| `K_tooth_raw` | Per-tooth K values |
+| `K_tooth_weighted_mean` | Count-weighted mean of per-tooth K |
+| `tooth_details` | Per-tooth detailed results |
+| `pairing_diagnostics` | Greedy-unique pairing statistics |
+| `residual_tau_diagnostics` | Residual tau statistics |
 
-Fields include `file`, matrix shape, total counts, nonzero bins, `schmidt_number`, `purity`, `largest_weight`, `n_singular_values`, threshold, normalized sum, status, and error message.
+### summary.csv
 
-## Residue Summary JSON
+Top-level result summary with one row per analysis run.
 
-`tdc_residue` summaries include selected channels, residue modulus, coincidence window, event counts, uniformity statistics, optional live calibration probe status, and TTBIN configuration.
+### pairing_diagnostics.json
 
-## TDC Layer Scan Summary JSON
+Standalone pairing statistics:
 
-Layer scan summaries include tag metadata, singles period scan, pairing layer summaries, surrogate shift/block shuffle summaries, time split stability, folding row count, interpretation, and notes.
+```json
+{
+  "comb": {
+    "candidate_count_total": 26656,
+    "accepted_pair_count_total": 26379,
+    "rejected_due_to_a_reuse": 277,
+    "rejected_due_to_b_reuse": 0
+  },
+  "gap": {
+    "candidate_count_total": 4829,
+    "accepted_pair_count_total": 4829,
+    "rejected_due_to_a_reuse": 0,
+    "rejected_due_to_b_reuse": 0
+  },
+  "full_summary": {
+    "candidate_count_comb": 26656,
+    "candidate_count_full": 7378,
+    "candidate_count_gap": 4829,
+    "accepted_pair_count_comb": 26379,
+    "accepted_pair_count_gap": 4829,
+    "accepted_pair_count_full": 31208
+  }
+}
+```
 
-## Coincidence Timeline Outputs
+### H_comb.csv / H_full_window.csv
 
-`scripts/analyze_ttbin_coincidence_timeline.py` writes:
+Square count matrices in the same format as H_single_line.csv.
 
-- `coincidence_timeline.csv`: acquisition-time bins with coincidence counts and rate.
-- `coincidence_timeline.png`: coincidence rate versus acquisition time.
-- `coincidence_timeline_summary.json`: input parameters, event counts, pair counts, histogram statistics, and Poisson comparison.
+- H_comb: JTI over tooth ROI union
+- H_full_window: JTI over full delay range (comb + gap extension)
+
+### tooth_details.csv
+
+Per-tooth results:
+
+| Column | Description |
+|--------|-------------|
+| peak_id | Peak identifier |
+| tau_raw_ps | Raw delay (t_B - t_A) |
+| tau_residual_ps | Residual delay (tau_raw - tau_align) |
+| roi_half_ps | ROI half-width |
+| fwhm_ps | FWHM from delay histogram |
+| counts_in_roi | Retained counts after edge guard |
+| K_tooth | Per-tooth Schmidt-like K |
+| purity | Per-tooth purity |
+| n_singular_values | Number of singular values |
+| low_count_warning | true if counts < min_counts_warning |
+
+### per_tooth_svd_input_{peak_id}.csv
+
+Individual per-tooth JTI matrices.
+
+### singular_values_H_comb.csv / singular_values_H_full_window.csv
+
+Singular values and lambda weights for each matrix.
+
+## Diagnostic Outputs
+
+### frame_origin_scan_k{K}.csv
+
+Frame origin scan results with score at each origin.
+
+### summary_k_scan.csv
+
+Summary of all k values with diagnostics.
+
+### CV/DV outputs
+
+- `cv_fine{N}ps_k{K}.csv/png`: Fine-bin 2D histogram (diagnostic)
+- `dv_k{K}_bw{BW}ps_dim{D}.csv/png`: Discrete JTI matrix (diagnostic)
+
+These are modulo-wrapped diagnostic outputs, NOT used for SVD/Schmidt analysis.
+
+## TDC Diagnostic Outputs
+
+### tdc_residue
+
+- Residue histograms, plots, and summary files
+- See `docs/DIAGNOSTICS_40PS.md` for interpretation
+
+### tdc_layer_scan
+
+- Layer scan CSV summaries, period scan plots, pairing modulo plots
+- See `docs/DIAGNOSTICS_40PS.md` for interpretation
+
+### coincidence_timeline
+
+- `coincidence_timeline.csv`: acquisition-time bins with counts and rate
+- `coincidence_timeline.png`: rate vs acquisition time
+- `coincidence_timeline_summary.json`: parameters and statistics

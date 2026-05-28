@@ -1,103 +1,111 @@
-# CLI
+# CLI Reference
 
-## Main Entry Points
+## Mode A: Single-line JTI Extraction
 
-Module entry points:
-
-- `python -m jti_extract.cli.extract` - JTI extraction with CV/DV/SVD output
-- `python -m jti_extract.cli.schmidt` - Schmidt number analysis
-- `python -m jti_extract.cli.tdc_residue` - TDC residue diagnostics
-- `python -m jti_extract.cli.tdc_layer_scan` - TDC layer scan diagnostics
-
-Console scripts after installation:
-
-- `jti-extract`
-- `jti-schmidt`
-- `jti-tdc-residue`
-- `jti-tdc-layer-scan`
-
-## JTI Extraction (`jti-extract`)
-
-The main JTI extraction tool produces three types of output:
-
-### Output Types
-
-1. **CV (Continuous Variable)**: Fine-bin 2D histogram showing modulo-time distribution
-   - File: `cv_fine{N}ps_k{K}.csv/png`
-   - Purpose: Diagnostic visualization of coincidence distribution
-
-2. **DV (Divided Variable)**: Discrete JTI matrix for physical analysis
-   - File: `dv_k{K}_bw{BW}ps_dim{D}.csv/png`
-   - Purpose: Standard JTI matrix for coincidence analysis
-
-3. **SVD (Unwrapped Edge-Guarded)**: Non-cyclic finite-window JTI for Schmidt/SVD analysis
-   - File: `svd_jti_unwrapped_guarded_k{K}_bw{BW}ps_dim{D}.csv/png`
-   - Purpose: SVD/Schmidt analysis (no wrap-around artifacts)
+**Tool**: `extract_jti.py` or `python -m jti_extract.cli.extract`
 
 ### Key Parameters
 
 | Parameter | Default | Description |
-|---|---|---|
+|-----------|---------|-------------|
 | `--ttbin` | required | Path to .ttbin file |
 | `--raw-ch-a-id` | 1 | TimeTagger raw channel id for A |
 | `--raw-ch-b-id` | 3 | TimeTagger raw channel id for B |
-| `--binwidth-ps` | 10 | Bin width in ps for DV output |
-| `--dimensions` | 128 | Dimension for DV output |
-| `--fine-bins` | 5 | Comma-separated fine bin widths for CV |
+| `--binwidth-ps` | 10 | Bin width in ps |
+| `--dimensions` | 128 | JTI matrix dimension |
+| `--window-ps` | None | Pairing window in ps (overrides k * binwidth_ps) |
 | `--k-values` | 1 | Comma-separated k values (window = k × binwidth) |
-| `--scan-frame-origin` | false | Scan frame_origin and select best |
+| `--pair-center-ps` | None | Pairing window center offset in ps |
+| `--tau-align-ps` | None | B channel alignment correction for unwrapped SVD |
+| `--tau0-ps` | 0 | Backward-compatible shortcut: sets both --pair-center-ps and --tau-align-ps |
 | `--svd-unwrapped` | true | Enable unwrapped edge-guarded JTI |
-| `--guard-bins` | 2 | Edge guard bins for unwrapped JTI |
-| `--tau0-ps` | 0 | B channel time offset in ps |
+| `--guard-bins` | 2 | Edge guard bins |
+| `--scan-frame-origin` | false | Scan frame_origin and select best |
+| `--out` | required | Output directory |
 
-### Example Usage
+### Tau Coordinate Handling
 
-```bash
-# Basic extraction with SVD unwrapped output
-python -m jti_extract.cli.extract \
-  --ttbin "path/to/data.ttbin" \
-  --raw-ch-a-id 1 --raw-ch-b-id 3 \
-  --binwidth-ps 50 --dimensions 128 \
-  --fine-bins 5 --k-values 1 \
-  --scan-frame-origin --svd-unwrapped \
-  --out "path/to/output"
+- `--pair-center-ps`: shifts the pairing window center. Pair selection: `|t_B - t_A - pair_center_ps| <= window_ps`
+- `--tau-align-ps`: shifts B channel for coordinate alignment. `t_B_corr = t_B - tau_align_ps`
+- `--tau0-ps`: backward-compatible shortcut, sets both above if not explicitly provided
 
-# Multiple k values and fine bins
-python -m jti_extract.cli.extract \
-  --ttbin "path/to/data.ttbin" \
-  --binwidth-ps 20 --dimensions 64 \
-  --fine-bins 1,2,5 --k-values 1,2,3 \
-  --scan-frame-origin \
-  --out "path/to/output"
+Resolution priority:
+```
+pair_center_ps = --pair-center-ps if provided, else --tau0-ps
+tau_align_ps = --tau-align-ps if provided, else --tau0-ps
 ```
 
-### Output Files
-
-For each k value, the tool generates:
-
-- `cv_fine{N}ps_k{K}.csv` - CV histogram (CSV)
-- `cv_fine{N}ps_k{K}.png` - CV histogram (PNG)
-- `cv_fine{N}ps_k{K}.meta.json` - CV metadata
-- `dv_k{K}_bw{BW}ps_dim{D}.csv` - DV matrix (CSV)
-- `dv_k{K}_bw{BW}ps_dim{D}.png` - DV matrix (PNG)
-- `dv_k{K}_bw{BW}ps_dim{D}.meta.json` - DV metadata
-- `svd_jti_unwrapped_guarded_k{K}_bw{BW}ps_dim{D}.csv` - SVD matrix (CSV)
-- `svd_jti_unwrapped_guarded_k{K}_bw{BW}ps_dim{D}.png` - SVD matrix (PNG)
-- `svd_jti_unwrapped_guarded_k{K}_bw{BW}ps_dim{D}.meta.json` - SVD metadata
-- `frame_origin_scan_k{K}.csv` - Frame origin scan results
-- `summary_k_scan.csv` - Summary of all k values
-- `extraction_summary.json` - Overall summary
-
-## Coincidence Timeline Diagnostic
-
-The standalone timeline script analyzes coincidence midpoint timestamps over the full acquisition time.
+### Example
 
 ```bash
-python scripts/analyze_ttbin_coincidence_timeline.py \
-  --input "<data.ttbin>" \
-  --channels 1 3 \
-  --coinc-window-ps 200 \
-  --pairing-mode all_pairs \
-  --time-bin-s 0.01 \
-  --output-dir results/coincidence_timeline
+python -m jti_extract.cli.extract \
+  --ttbin "data.1.ttbin" \
+  --raw-ch-a-id 2 --raw-ch-b-id 3 \
+  --binwidth-ps 20 --dimensions 128 \
+  --window-ps 200 \
+  --pair-center-ps 830 --tau-align-ps 830 \
+  --svd-unwrapped --guard-bins 2 \
+  --out "output/"
+```
+
+## Mode B: BFC/FPC Multi-line Analysis
+
+**Tool**: `compute_fpc_schmidt.py`
+
+### Key Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--ttbin` | required | Path to .ttbin file |
+| `--peaks-csv` | required | Path to peaks CSV (delay_ps = raw_tau) |
+| `--delay-csv` | required | Path to delay histogram CSV |
+| `--raw-ch-a-id` | 2 | TimeTagger raw channel id for A |
+| `--raw-ch-b-id` | 3 | TimeTagger raw channel id for B |
+| `--tau-align-ps` | None | B channel alignment (priority: explicit > peaks_csv > tau0) |
+| `--tau0-ps` | None | Fallback for tau_align_ps |
+| `--binwidth-ps` | 20 | Bin width in ps |
+| `--dimensions` | 128 | JTI matrix dimension |
+| `--guard-bins` | 2 | Edge guard bins |
+| `--min-counts-included` | 500 | Min counts for included summary statistics |
+| `--min-counts-warning` | 10 | Min counts below which low_count_warning is set |
+| `--prominence-fractions` | 0.02,0.04,0.08 | Comma-separated prominence thresholds |
+| `--primary-prominence` | 0.04 | Primary prominence fraction |
+| `--out` | required | Output directory |
+
+### Example
+
+```bash
+python compute_fpc_schmidt.py \
+  --ttbin "data.1.ttbin" \
+  --peaks-csv "pminus_peaks.csv" \
+  --delay-csv "pminus_delay_histogram.csv" \
+  --tau-align-ps 830 \
+  --binwidth-ps 20 --dimensions 128 --guard-bins 2 \
+  --out "output/"
+```
+
+## Other Tools
+
+### Schmidt Number Analysis
+
+```bash
+python -m jti_extract.cli.schmidt --input output/ --pattern "*.counts.csv"
+```
+
+### TDC Residue Diagnostics
+
+```bash
+python -m jti_extract.cli.tdc_residue --ttbin data.1.ttbin --ch1 1 --ch3 3 --out output/
+```
+
+### TDC Layer Scan
+
+```bash
+python -m jti_extract.cli.tdc_layer_scan --ttbin data.1.ttbin --ch-a 1 --ch-b 3 --window-ps 1000 --out output/
+```
+
+### Coincidence Timeline
+
+```bash
+python scripts/analyze_ttbin_coincidence_timeline.py --input data.1.ttbin --channels 2 3 --coinc-window-ps 200 --output-dir output/
 ```

@@ -12,15 +12,13 @@ For parsed NPZ input, `Ch` stores logical channel labels. The JTI extractor defa
 
 Required fields:
 
-- `Ch`: channel array.
-- `TimeTag`: timestamp array in ps.
+- `Ch`: channel array
+- `TimeTag`: timestamp array in ps
 
 Optional fields:
 
 - `overflow_types`
 - `missed_events`
-
-The extractor searches `--data` for `parsed_timebin_data.npz`, `01_raw_parsing/parsed_timebin_data.npz`, and `results/01_raw_parsing/parsed_timebin_data.npz`.
 
 ## TTBIN Requirements
 
@@ -28,21 +26,25 @@ TTBIN reading requires Swabian Instruments TimeTagger Python bindings. The proje
 
 ## Binning Definitions
 
-- `bin_width_ps`: width of one time bin in ps.
-- `dimensions`: number of bins per frame and output matrix axis.
-- `frame_width_ps`: `bin_width_ps * dimensions`.
-- `frame_origin_ps`: shared time origin used before floor division into bins. It is not a two-channel delay compensation term.
+- `bin_width_ps`: width of one time bin in ps
+- `dimensions`: number of bins per frame and output matrix axis
+- `frame_width_ps`: `bin_width_ps * dimensions`
+- `frame_origin_ps`: shared time origin used before floor division into bins
 
-## Strict Single-Hit Per Frame
+## Tau Coordinate System
 
-For each logical channel, events are grouped by frame. Frames with exactly one event survive. Frames with zero or multiple events are excluded. Pairs are formed only for frames present exactly once in both channels.
+- `delay_ps` in peaks_csv: always `raw_tau = t_B - t_A`
+- `tau_align_ps`: B channel alignment correction. `t_B_corr = t_B - tau_align_ps`
+- `residual_tau = t_B_corr - t_A = delay_ps - tau_align_ps`
+- `pair_center_ps`: pairing window center offset. Pair selection: `|t_B - t_A - pair_center_ps| <= window_ps`
 
 ## Pairing Methods
 
-- `all_pairs`: all cross-channel deltas inside the coincidence window, accumulated as streaming statistics.
-- `nearest`: nearest event in channel B for each event in channel A within the window.
-- `greedy_unique`: sorted candidate pairs by absolute delay, then greedily keeps one-to-one channel A/B assignments.
+- `all_pairs`: all cross-channel deltas inside the coincidence window
+- `nearest`: nearest event in channel B for each event in channel A within the window
+- `greedy_unique`: sorted candidate pairs by absolute delay, then greedily keeps one-to-one assignments
+- `peak_aware_greedy_unique`: for BFC/FPC, each peak has its own ROI; global greedy ensures each A/B used at most once
 
 ## Output Stability
 
-Existing CLI parameter names, defaults except removed unsafe hard-coded `tdc_layer_scan` input path, and output field meanings are treated as compatibility surface. Schema additions should be additive.
+Existing CLI parameter names and output field meanings are treated as compatibility surface. Schema additions should be additive.
