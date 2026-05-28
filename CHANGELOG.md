@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.0 - Pseudo-CV Heatmap & Batch Analysis
+
+### Added
+- `scripts/pseudo_cv_from_modeb.py`: Pseudo-CV heatmap generation from modeB peak-aware pairing.
+  - Reuses modeB's adaptive per-peak ROI pairing + greedy-unique constraint.
+  - Bins accepted pairs into a fine-grained 2D histogram at configurable resolution.
+  - `--fine-bin-ps` parameter (default 20ps) controls fine bin size.
+  - Axes labeled in DV-bin units (0→dim-1), directly corresponding to the DV matrix.
+  - Local ROI override with 0.6× multiplier for wider coverage.
+- `scripts/run_bfc_40_50_batch.py`: Batch runner for Mode B (FPC Schmidt) + CV 5ps extraction.
+  - Runs compute_fpc_schmidt.py (6 runs: 3 angles × 2 binwidths).
+  - Runs extract.py CV 5ps extraction (6 runs).
+- `scripts/run_pseudo_cv_batch.py`: Batch runner for pseudo-CV generation.
+  - Runs pseudo_cv_from_modeb.py (6 runs: 3 angles × 2 binwidths).
+
 ## v0.1.0 - JTI-stage Schmidt-like Analysis Stable Version
 
 ### Added
