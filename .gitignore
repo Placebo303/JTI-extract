@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
 .pytest_tmp/
 pytest-cache-files-*/
@@ -10,6 +11,7 @@ build/
 dist/
 *.egg-info/
 
+# Raw data and large outputs
 *.ttbin
 *.npz
 *.png
@@ -23,3 +25,13 @@ results/**
 !tests/fixtures/*.csv
 !examples/tiny_run/expected_outputs/**
 !docs/reports/**
+
+# Output directories
+outputs/
+debug/
+tmp/
+*.zip
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/

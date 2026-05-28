@@ -523,8 +523,11 @@ def _unique_frame_values(frames: np.ndarray, values: np.ndarray) -> tuple[np.nda
 
 
 def _strict_single_hit_pairs(t_a: np.ndarray, t_b: np.ndarray, bin_width_ps: int, dim: int, frame_origin_ps: float) -> tuple[np.ndarray, np.ndarray]:
-    ba = np.floor((t_a.astype(np.float64) - float(frame_origin_ps)) / float(bin_width_ps)).astype(np.int64)
-    bb = np.floor((t_b.astype(np.float64) - float(frame_origin_ps)) / float(bin_width_ps)).astype(np.int64)
+    # Integer arithmetic to avoid float64 precision loss on large timestamps
+    origin_int = np.int64(int(round(frame_origin_ps)))
+    bw = np.int64(bin_width_ps)
+    ba = ((t_a - origin_int) // bw).astype(np.int64)
+    bb = ((t_b - origin_int) // bw).astype(np.int64)
     fa = np.floor_divide(ba, int(dim))
     fb = np.floor_divide(bb, int(dim))
     da = np.mod(ba, int(dim)).astype(np.int64)
@@ -561,8 +564,11 @@ def folding_summary(pair_sets: dict[str, tuple[np.ndarray, np.ndarray, np.ndarra
         )
         for bw in bin_widths:
             for dim in dims:
-                ba = np.mod(np.floor((pa.astype(np.float64) - float(frame_origin_ps)) / float(bw)).astype(np.int64), int(dim))
-                bb = np.mod(np.floor((pb.astype(np.float64) - float(frame_origin_ps)) / float(bw)).astype(np.int64), int(dim))
+                # Integer arithmetic to avoid float64 precision loss on large timestamps
+                origin_int = np.int64(int(round(frame_origin_ps)))
+                bw_i = np.int64(bw)
+                ba = np.mod(((pa - origin_int) // bw_i), int(dim)).astype(np.int64)
+                bb = np.mod(((pb - origin_int) // bw_i), int(dim)).astype(np.int64)
                 counts = _pairs_to_counts(ba, bb, dim)
                 rows.append({"pairing_layer": layer, "folding_layer": "folded_without_strict", "bin_width_ps": int(bw), "dim": int(dim), "frame_origin_ps": float(frame_origin_ps), "n_pairs": int(deltas.size), "A40": raw40["amplitude"], **_jti_diag_metrics(counts)})
                 sa, sb = _strict_single_hit_pairs(pa, pb, bw, dim, frame_origin_ps)

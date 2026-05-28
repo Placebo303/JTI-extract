@@ -270,8 +270,13 @@ def _find_coincidence_pairs(
     window_ps: int,
     logical_ch_a: int,
     logical_ch_b: int,
+    pair_center_ps: int = 0,
 ) -> _CoincidenceResult:
-    """Find all coincidence pairs within window. Events can be reused."""
+    """Find all coincidence pairs within window. Events can be reused.
+
+    pair_center_ps shifts the pairing window center:
+        searches for B events where |t_B - t_A - pair_center_ps| <= window_ps
+    """
     Ch = timetags.Ch
     TimeTag = timetags.TimeTag
     if Ch.shape != TimeTag.shape:
@@ -292,9 +297,10 @@ def _find_coincidence_pairs(
         )
 
     w = int(window_ps)
-    # Find all B events within window of each A event
-    left = np.searchsorted(t_b, t_a - w, side="left")
-    right = np.searchsorted(t_b, t_a + w, side="right")
+    center = int(pair_center_ps)
+    # Find all B events within window centered at pair_center_ps
+    left = np.searchsorted(t_b, t_a + center - w, side="left")
+    right = np.searchsorted(t_b, t_a + center + w, side="right")
     pair_counts = right - left
     total_pairs = int(np.sum(pair_counts))
 
@@ -337,8 +343,12 @@ def _find_coincidence_pairs_with_delay(
     logical_ch_a: int,
     logical_ch_b: int,
     delay_ps: int,
+    pair_center_ps: int = 0,
 ) -> _CoincidenceResult:
-    """Find coincidence pairs with B channel delayed by delay_ps (for accidentals estimation)."""
+    """Find coincidence pairs with B channel delayed by delay_ps (for accidentals estimation).
+
+    pair_center_ps shifts the pairing window center (same as _find_coincidence_pairs).
+    """
     Ch = timetags.Ch
     TimeTag = timetags.TimeTag
     if Ch.shape != TimeTag.shape:
@@ -359,8 +369,9 @@ def _find_coincidence_pairs_with_delay(
         )
 
     w = int(window_ps)
-    left = np.searchsorted(t_b, t_a - w, side="left")
-    right = np.searchsorted(t_b, t_a + w, side="right")
+    center = int(pair_center_ps)
+    left = np.searchsorted(t_b, t_a + center - w, side="left")
+    right = np.searchsorted(t_b, t_a + center + w, side="right")
     pair_counts = right - left
     total_pairs = int(np.sum(pair_counts))
 
@@ -407,6 +418,12 @@ def _time_tags_to_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_origin_
     return bins.astype(np.int64, copy=False)
 
 
+def _frame_local_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_bins: int, frame_origin_ps: float) -> np.ndarray:
+    """Convert timestamps to frame-local bin indices (modulo frame_bins)."""
+    global_bins = _time_tags_to_bins(times_ps, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+    return np.mod(global_bins, int(frame_bins)).astype(np.int64, copy=False)
+
+
 def _compute_cv_histogram(
     t_a_paired: np.ndarray,
     t_b_paired: np.ndarray,
@@ -434,9 +451,12 @@ def _compute_cv_histogram(
     a_bin = (a_mod // fine).astype(np.int64)
     b_bin = (b_mod // fine).astype(np.int64)
 
-    # Clip to valid range (safety)
-    np.clip(a_bin, 0, n_bins - 1, out=a_bin)
-    np.clip(b_bin, 0, n_bins - 1, out=b_bin)
+    # Bounds check: reject out-of-range bins instead of clipping
+    valid = (a_bin >= 0) & (a_bin < n_bins) & (b_bin >= 0) & (b_bin < n_bins)
+    if not np.all(valid):
+        n_invalid = int(np.sum(~valid))
+        a_bin = a_bin[valid]
+        b_bin = b_bin[valid]
 
     cv = np.zeros((n_bins, n_bins), dtype=np.float64)
     np.add.at(cv, (a_bin, b_bin), 1.0)
@@ -470,9 +490,11 @@ def _compute_dv_matrix(
     a_local = np.mod(a_bin, dim).astype(np.int64)
     b_local = np.mod(b_bin, dim).astype(np.int64)
 
-    # Clip to valid range (safety)
-    np.clip(a_local, 0, dimension - 1, out=a_local)
-    np.clip(b_local, 0, dimension - 1, out=b_local)
+    # Bounds check: reject out-of-range bins instead of clipping
+    valid = (a_local >= 0) & (a_local < dimension) & (b_local >= 0) & (b_local < dimension)
+    if not np.all(valid):
+        a_local = a_local[valid]
+        b_local = b_local[valid]
 
     dv = np.zeros((dimension, dimension), dtype=np.float64)
     np.add.at(dv, (a_local, b_local), 1.0)
@@ -568,9 +590,12 @@ def _compute_unwrapped_edge_guarded_jti(
     i = xa // bw
     j = xb // bw
 
-    # Clip to valid range (safety)
-    np.clip(i, 0, dim - 1, out=i)
-    np.clip(j, 0, dim - 1, out=j)
+    # Bounds check: reject out-of-range bins instead of clipping
+    valid = (i >= 0) & (i < dim) & (j >= 0) & (j < dim)
+    n_invalid = int(np.sum(~valid))
+    if n_invalid > 0:
+        i = i[valid]
+        j = j[valid]
 
     H = np.zeros((dim, dim), dtype=np.float64)
     np.add.at(H, (i, j), 1.0)
@@ -580,10 +605,12 @@ def _compute_unwrapped_edge_guarded_jti(
         "raw_pairs_before_unwrap": raw_pairs,
         "rejected_cross_frame_pairs": n_cross_frame,
         "rejected_edge_pairs": n_edge_rejected,
+        "invalid_bin_pairs": n_invalid,
         "kept_pairs": kept,
         "kept_fraction_of_raw_pairs": kept / raw_pairs if raw_pairs > 0 else 0.0,
         "cross_frame_fraction": n_cross_frame / raw_pairs if raw_pairs > 0 else 0.0,
         "edge_rejected_fraction": n_edge_rejected / raw_pairs if raw_pairs > 0 else 0.0,
+        "invalid_bin_fraction": n_invalid / raw_pairs if raw_pairs > 0 else 0.0,
     }
     return H, meta
 
@@ -640,6 +667,33 @@ def _compute_score(diag_band_fraction: float, accidental_fraction: float) -> flo
     return float(diag_band_fraction) - float(accidental_fraction)
 
 
+def _plot_png(path: Path, mat: np.ndarray, *, title: str) -> None:
+    """Plot JTI heatmap and save as PNG."""
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        raise RuntimeError(f"matplotlib is required for --plot: {exc}") from exc
+
+    n = int(mat.shape[0])
+    fig, ax = plt.subplots(figsize=(6.0, 5.0), dpi=160)
+    im = ax.imshow(
+        mat,
+        origin="lower",
+        cmap="viridis",
+        extent=[-0.5, n - 0.5, -0.5, n - 0.5],
+        aspect="equal",
+    )
+    ax.set_title(title)
+    ax.set_xlabel("Signal time-bin index")
+    ax.set_ylabel("Idler time-bin index")
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    plt.colorbar(im, ax=ax, label="Counts")
+    fig.tight_layout()
+    fig.savefig(str(path))
+    plt.close(fig)
+
+
 def diagonal_coincidence_profile(counts: np.ndarray, *, band_bins: int = 1) -> np.ndarray:
     """Sum counts along the main diagonal direction over |col-row| <= band_bins."""
     mat = np.asarray(counts, dtype=np.float64)
@@ -660,6 +714,247 @@ def diagonal_coincidence_profile(counts: np.ndarray, *, band_bins: int = 1) -> n
 
 
 # ---------------------------------------------------------------------------
+# Chunked pair finding with center offset
+# ---------------------------------------------------------------------------
+
+def iter_pair_chunks_centered(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    center_ps: int,
+    half_window_ps: int,
+    chunk_events: int = 100_000,
+) -> Iterable[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Find coincidence pairs within a centered window, yielded in chunks.
+
+    For each A event, finds B events in [a + center - half, a + center + half].
+    Yields (a_rep, b_vals, delta) tuples where delta = b - a.
+    All arithmetic in int64 to avoid float64 precision loss on large timestamps.
+    """
+    t_b = np.asarray(t_b, dtype=np.int64)
+    center = int(center_ps)
+    half = int(half_window_ps)
+    for start in range(0, int(t_a.size), int(chunk_events)):
+        a = np.asarray(t_a[start : start + int(chunk_events)], dtype=np.int64)
+        left = np.searchsorted(t_b, a + center - half, side="left")
+        right = np.searchsorted(t_b, a + center + half, side="right")
+        pair_counts = right - left
+        total = int(np.sum(pair_counts))
+        if total <= 0:
+            continue
+        a_rep = np.repeat(a, pair_counts)
+        b_vals = np.empty(total, dtype=np.int64)
+        pos = 0
+        for lo, hi in zip(left, right):
+            n = int(hi - lo)
+            if n:
+                b_vals[pos : pos + n] = t_b[lo:hi]
+                pos += n
+        b_vals = b_vals[:pos]
+        yield a_rep[:pos], b_vals, b_vals - a_rep[:pos]
+
+
+# ---------------------------------------------------------------------------
+# Centered line JTI computation
+# ---------------------------------------------------------------------------
+
+def compute_centered_line_jti(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    tau_center_ps: int,
+    half_window_ps: int,
+    dim: int,
+    bin_width_ps: int,
+    frame_origin_ps: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Compute JTI for a single tau-centered line.
+
+    Shifts B timestamps by tau_center_ps so the selected line folds near the main diagonal.
+    All binning uses integer arithmetic to avoid float64 precision loss on large timestamps.
+    """
+    import math
+
+    counts = np.zeros((int(dim), int(dim)), dtype=np.float64)
+    total_pairs = 0
+    a_with_pairs = 0
+    max_b_per_a = 0
+    delta_sum = 0.0
+    delta_sq_sum = 0.0
+    for a_rep, b_vals, deltas in iter_pair_chunks_centered(
+        t_a, t_b,
+        center_ps=int(tau_center_ps),
+        half_window_ps=int(half_window_ps),
+    ):
+        if a_rep.size == 0:
+            continue
+        # Keep int64 arithmetic to avoid float64 precision loss on large timestamps
+        b_shifted = b_vals - np.int64(int(tau_center_ps))
+        x = _frame_local_bins(a_rep, bin_width_ps=int(bin_width_ps), frame_bins=int(dim), frame_origin_ps=float(frame_origin_ps))
+        y = _frame_local_bins(b_shifted, bin_width_ps=int(bin_width_ps), frame_bins=int(dim), frame_origin_ps=float(frame_origin_ps))
+        np.add.at(counts, (x, y), 1.0)
+        total_pairs += int(a_rep.size)
+        unique_a = np.unique(a_rep)
+        a_with_pairs += int(unique_a.size)
+        if unique_a.size:
+            _, per_a = np.unique(a_rep, return_counts=True)
+            max_b_per_a = max(max_b_per_a, int(np.max(per_a)))
+        centered_delta = deltas.astype(np.float64, copy=False) - float(tau_center_ps)
+        delta_sum += float(np.sum(centered_delta))
+        delta_sq_sum += float(np.sum(centered_delta * centered_delta))
+    mean_delta = delta_sum / float(total_pairs) if total_pairs else math.nan
+    var_delta = delta_sq_sum / float(total_pairs) - mean_delta * mean_delta if total_pairs else math.nan
+    meta = {
+        "n_pairs": int(total_pairs),
+        "n_a_with_window_pairs": int(a_with_pairs),
+        "max_b_per_a_in_window": int(max_b_per_a),
+        "tau_center_ps": int(tau_center_ps),
+        "line_half_window_ps": int(half_window_ps),
+        "centered_delta_mean_ps": float(mean_delta) if np.isfinite(mean_delta) else math.nan,
+        "centered_delta_std_ps": float(math.sqrt(max(0.0, var_delta))) if np.isfinite(var_delta) else math.nan,
+    }
+    return counts, meta
+
+
+# ---------------------------------------------------------------------------
+# Multiline JTI with raw offsets
+# ---------------------------------------------------------------------------
+
+def compute_multiline_raw_offset_jti(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    tau_centers_ps: list[int],
+    tau_reference_ps: int,
+    half_window_ps: int,
+    dim: int,
+    bin_width_ps: int,
+    frame_origin_ps: float,
+    require_same_frame: bool = False,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Compute multiline JTI with raw offset display.
+
+    B channel is shifted only by tau_reference_ps, so FPC lines remain as parallel
+    diagonal offsets relative to that reference.
+    All binning uses integer arithmetic to avoid float64 precision loss on large timestamps.
+    """
+    counts = np.zeros((int(dim), int(dim)), dtype=np.float64)
+    total_pairs = 0
+    per_line_pairs: dict[str, int] = {}
+    used_centers: list[int] = []
+    for tau in tau_centers_ps:
+        line_pairs = 0
+        for a_rep, b_vals, _ in iter_pair_chunks_centered(
+            t_a, t_b,
+            center_ps=int(tau),
+            half_window_ps=int(half_window_ps),
+        ):
+            if a_rep.size == 0:
+                continue
+            if require_same_frame:
+                # Keep int64 arithmetic for same-frame filtering
+                shifted_b = b_vals - np.int64(int(tau_reference_ps))
+                gx = _time_tags_to_bins(a_rep, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+                gy = _time_tags_to_bins(shifted_b, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+                fx = np.floor_divide(gx, int(dim))
+                fy = np.floor_divide(gy, int(dim))
+                keep = fx == fy
+                if not np.any(keep):
+                    continue
+                x = np.mod(gx[keep], int(dim)).astype(np.int64, copy=False)
+                y = np.mod(gy[keep], int(dim)).astype(np.int64, copy=False)
+                line_pairs += int(np.count_nonzero(keep))
+            else:
+                x = _frame_local_bins(
+                    a_rep,
+                    bin_width_ps=int(bin_width_ps),
+                    frame_bins=int(dim),
+                    frame_origin_ps=float(frame_origin_ps),
+                )
+                # Keep int64 arithmetic for B shift
+                shifted_b = b_vals - np.int64(int(tau_reference_ps))
+                y = _frame_local_bins(
+                    shifted_b,
+                    bin_width_ps=int(bin_width_ps),
+                    frame_bins=int(dim),
+                    frame_origin_ps=float(frame_origin_ps),
+                )
+                line_pairs += int(a_rep.size)
+            np.add.at(counts, (x, y), 1.0)
+        per_line_pairs[str(int(tau))] = int(line_pairs)
+        total_pairs += int(line_pairs)
+        used_centers.append(int(tau))
+    return counts, {
+        "n_pairs": int(total_pairs),
+        "tau_centers_ps": used_centers,
+        "tau_reference_ps": int(tau_reference_ps),
+        "line_half_window_ps": int(half_window_ps),
+        "require_same_frame": bool(require_same_frame),
+        "per_line_pairs": per_line_pairs,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Display JTI with alignment-centered diagonal overlay
+# ---------------------------------------------------------------------------
+
+def compute_alignment_centered_display_jti(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    selected_offsets: list[dict[str, Any]],
+    tau0_ps: float,
+    center_offset_bin: int,
+    half_window_ps: int,
+    dim: int,
+    bin_width_ps: int,
+    frame_origin_ps: float,
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Compute display JTI where the brightest delay peak is forced onto the main diagonal.
+
+    Each peak is placed on its own diagonal offset. Only A events with pairs in the
+    peak's window are counted.
+    All binning uses integer arithmetic to avoid float64 precision loss on large timestamps.
+    """
+    counts = np.zeros((int(dim), int(dim)), dtype=np.uint64)
+    peak_meta: list[dict[str, Any]] = []
+    for idx, row in enumerate(selected_offsets):
+        tau_rel = float(row.get("tau_rel_ps", 0.0))
+        tau_center = float(tau0_ps) + tau_rel
+        diagonal_offset = int(row.get("diagonal_offset_bin", round(tau_rel / float(bin_width_ps))))
+        display_offset = int(center_offset_bin) + diagonal_offset
+        n_pairs = 0
+        for a_rep, _b_vals, _dt_vals in iter_pair_chunks_centered(
+            t_a, t_b,
+            center_ps=int(round(tau_center)),
+            half_window_ps=int(half_window_ps),
+        ):
+            x = _frame_local_bins(a_rep, bin_width_ps=int(bin_width_ps), frame_bins=int(dim), frame_origin_ps=float(frame_origin_ps))
+            y = x + int(display_offset)
+            keep = (y >= 0) & (y < int(dim))
+            if np.any(keep):
+                np.add.at(counts, (x[keep], y[keep]), 1)
+                n_pairs += int(np.count_nonzero(keep))
+        peak_meta.append(
+            {
+                "peak_id": row.get("peak_id", f"p{idx}"),
+                "tau_ps": float(tau_center),
+                "tau_rel_ps": tau_rel,
+                "chosen_bw_ps": float(bin_width_ps),
+                "diagnostic_diagonal_offset_bin": int(diagonal_offset),
+                "display_offset_bin": int(display_offset),
+                "center_offset_bin": int(center_offset_bin),
+                "alignment_error_ps": float(row.get("alignment_error_ps", 0.0) or 0.0),
+                "norm_height": float(row.get("norm_height", 0.0) or 0.0),
+                "fwhm_ps": float(row.get("fwhm_ps", float("nan")) or float("nan")),
+                "fwhm_bins": float(row.get("fwhm_bins", float("nan")) or float("nan")),
+                "n_pairs_plotted": int(n_pairs),
+            }
+        )
+    return counts, peak_meta
+
+
+# ---------------------------------------------------------------------------
 # Frame origin scan
 # ---------------------------------------------------------------------------
 
@@ -677,6 +972,7 @@ def _scan_frame_origin(
     origin_stop_ps: float | None,
     origin_step_ps: float,
     quiet: bool,
+    pair_center_ps: int = 0,
 ) -> _ScanResult:
     """Scan frame_origin for a given k value."""
     window_ps = k * binwidth_ps
@@ -689,6 +985,7 @@ def _scan_frame_origin(
         window_ps=window_ps,
         logical_ch_a=logical_ch_a,
         logical_ch_b=logical_ch_b,
+        pair_center_ps=pair_center_ps,
     )
 
     # Pre-find accidentals pairs (B delayed by several frame periods)
@@ -699,6 +996,7 @@ def _scan_frame_origin(
         logical_ch_a=logical_ch_a,
         logical_ch_b=logical_ch_b,
         delay_ps=delay_ps,
+        pair_center_ps=pair_center_ps,
     )
 
     if not quiet:
@@ -900,6 +1198,7 @@ def run_extract(
     dimension: int,
     fine_bins: list[int],
     k_values: list[int],
+    window_ps_override: int | None = None,
     scan_frame_origin: bool,
     frame_origin_ps: float,
     frame_origin_start_ps: float,
@@ -915,6 +1214,8 @@ def run_extract(
     svd_unwrapped: bool = True,
     guard_bins: int = 2,
     tau0_ps: int = 0,
+    pair_center_ps: int = 0,
+    tau_align_ps: int = 0,
 ) -> dict:
     """Main JTI extraction entry point with CV/DV/SVD unwrapped output."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -938,7 +1239,7 @@ def run_extract(
     summary_rows: list[dict] = []
 
     for k in k_values:
-        window_ps = k * binwidth_ps
+        window_ps = window_ps_override if window_ps_override is not None else k * binwidth_ps
         if not quiet:
             print(f"\n--- k={k}, window_ps={window_ps} ---")
 
@@ -956,6 +1257,7 @@ def run_extract(
                 origin_stop_ps=frame_origin_stop_ps,
                 origin_step_ps=frame_origin_step_ps,
                 quiet=quiet,
+                pair_center_ps=int(pair_center_ps),
             )
             best_origin = scan_result.best_frame_origin_ps
 
@@ -974,6 +1276,7 @@ def run_extract(
             window_ps=window_ps,
             logical_ch_a=0,
             logical_ch_b=1,
+            pair_center_ps=int(pair_center_ps),
         )
 
         # Find accidentals pairs
@@ -984,6 +1287,7 @@ def run_extract(
             logical_ch_a=0,
             logical_ch_b=1,
             delay_ps=delay_ps,
+            pair_center_ps=int(pair_center_ps),
         )
 
         total_pairs = int(result.t_a_paired.size)
@@ -1116,7 +1420,7 @@ def run_extract(
                 binwidth_ps=binwidth_ps,
                 dim=dimension,
                 origin_ps=int(round(best_origin)),
-                tau0_ps=tau0_ps,
+                tau0_ps=int(tau_align_ps),
                 guard_bins=guard_bins,
             )
 
@@ -1124,6 +1428,29 @@ def run_extract(
             svd_kept_fraction = svd_meta["kept_fraction_of_raw_pairs"]
             svd_cross_frame_fraction = svd_meta["cross_frame_fraction"]
             svd_edge_rejected_fraction = svd_meta["edge_rejected_fraction"]
+
+            # Residual tau diagnostics
+            _diag_dim = svd_matrix.shape[0]
+            _diag_i, _diag_j = np.meshgrid(np.arange(_diag_dim), np.arange(_diag_dim), indexing='ij')
+            _diag_delta = _diag_j - _diag_i
+            _diag_total = float(np.sum(svd_matrix))
+            if _diag_total > 0:
+                _diag_mean = float(np.sum(svd_matrix * _diag_delta) / _diag_total)
+                _diag_std = float(np.sqrt(np.sum(svd_matrix * (_diag_delta - _diag_mean) ** 2) / _diag_total))
+                _diag_nz = svd_matrix > 0
+                _diag_min = int(_diag_delta[_diag_nz].min()) * binwidth_ps if np.any(_diag_nz) else 0
+                _diag_max = int(_diag_delta[_diag_nz].max()) * binwidth_ps if np.any(_diag_nz) else 0
+            else:
+                _diag_mean = 0.0
+                _diag_std = 0.0
+                _diag_min = 0
+                _diag_max = 0
+            residual_diagnostics = {
+                "weighted_mean_residual_tau_ps": round(_diag_mean * binwidth_ps, 2),
+                "weighted_std_residual_tau_ps": round(_diag_std * binwidth_ps, 2),
+                "offset_min_ps": _diag_min,
+                "offset_max_ps": _diag_max,
+            }
 
             if save_csv:
                 svd_csv_path = out_dir / f"svd_jti_unwrapped_guarded_k{k}_bw{binwidth_ps}ps_dim{dimension}.csv"
@@ -1148,6 +1475,7 @@ def run_extract(
             # Save SVD meta
             svd_meta_full = {
                 "mode": "unwrapped_edge_guarded_noncyclic",
+                "analysis_mode": "single_line_jti",
                 "pairing_mode": "all_pairs_window",
                 "allows_event_reuse": True,
                 "allows_wraparound": False,
@@ -1158,9 +1486,17 @@ def run_extract(
                 "dim": dimension,
                 "frame_period_ps": frame_period_ps,
                 "origin_ps": int(round(best_origin)),
-                "tau0_ps": tau0_ps,
+                "tau0_ps": int(tau0_ps),
+                "pair_center_ps": int(pair_center_ps),
+                "tau_align_ps": int(tau_align_ps),
+                "tau0_ps_input": int(tau0_ps),
+                "pair_center_source": "explicit",
+                "tau_align_source": "explicit",
+                "tau_coordinate_for_selection": "raw_tau = t_B - t_A",
+                "tau_coordinate_after_alignment": "residual_tau = (t_B - tau_align_ps) - t_A",
                 "guard_bins": guard_bins,
                 "guard_ps": guard_bins * binwidth_ps,
+                "residual_tau_diagnostics": residual_diagnostics,
                 **svd_meta,
                 "diagnostics": compute_jti_diagnostics(svd_matrix, band_bins=band_bins),
                 "input_source": str(input_source),
@@ -1252,6 +1588,8 @@ def main() -> int:
     ap.add_argument("--dimensions", type=int, default=128, help="Dimension for DV output (default: 128).")
     ap.add_argument("--fine-bins", default="5", help="Comma-separated fine bin widths in ps for CV output (default: 5).")
     ap.add_argument("--k-values", default="1", help="Comma-separated k values for window = k * binwidth (default: 1).")
+    ap.add_argument("--window-ps", type=int, default=None,
+                    help="Pairing window in ps directly (overrides k * binwidth_ps).")
     ap.add_argument("--scan-frame-origin", action="store_true", help="Scan frame_origin and select best.")
     ap.add_argument("--frame-origin-ps", type=float, default=0.0, help="Fixed frame_origin_ps (used when not scanning).")
     ap.add_argument("--frame-origin-start-ps", type=float, default=0.0, help="Start for frame_origin scan.")
@@ -1267,7 +1605,9 @@ def main() -> int:
     ap.add_argument("--svd-unwrapped", action="store_true", default=True, help="Enable unwrapped edge-guarded JTI output for SVD/Schmidt analysis (default: enabled).")
     ap.add_argument("--no-svd-unwrapped", dest="svd_unwrapped", action="store_false", help="Disable unwrapped edge-guarded JTI output.")
     ap.add_argument("--guard-bins", type=int, default=2, help="Edge guard bins for unwrapped JTI (default: 2).")
-    ap.add_argument("--tau0-ps", type=int, default=0, help="B channel time offset in ps (default: 0).")
+    ap.add_argument("--tau0-ps", type=int, default=0, help="Backward-compatible shortcut: sets both --pair-center-ps and --tau-align-ps (default: 0).")
+    ap.add_argument("--pair-center-ps", type=int, default=None, help="Pairing window center offset in ps (default: from --tau0-ps).")
+    ap.add_argument("--tau-align-ps", type=int, default=None, help="B channel alignment correction for unwrapped SVD output (default: from --tau0-ps).")
 
     args = ap.parse_args()
 
@@ -1292,6 +1632,16 @@ def main() -> int:
     except Exception:
         raise SystemExit(f"Invalid --k-values: {args.k_values}")
 
+    # Resolve pair_center_ps and tau_align_ps
+    tau0 = args.tau0_ps
+    pair_center = args.pair_center_ps if args.pair_center_ps is not None else tau0
+    tau_align = args.tau_align_ps if args.tau_align_ps is not None else tau0
+
+    if pair_center is None:
+        raise SystemExit("Must provide --tau0-ps or --pair-center-ps")
+    if tau_align is None:
+        raise SystemExit("Must provide --tau0-ps or --tau-align-ps")
+
     run_extract(
         ttbin=ttbin,
         raw_ch_a_id=int(args.raw_ch_a_id),
@@ -1300,6 +1650,7 @@ def main() -> int:
         dimension=int(args.dimensions),
         fine_bins=fine_bins,
         k_values=k_values,
+        window_ps_override=args.window_ps,
         scan_frame_origin=bool(args.scan_frame_origin),
         frame_origin_ps=float(args.frame_origin_ps),
         frame_origin_start_ps=float(args.frame_origin_start_ps),
@@ -1314,7 +1665,9 @@ def main() -> int:
         save_png=not bool(args.no_png),
         svd_unwrapped=bool(args.svd_unwrapped),
         guard_bins=int(args.guard_bins),
-        tau0_ps=int(args.tau0_ps),
+        tau0_ps=int(tau0) if tau0 is not None else 0,
+        pair_center_ps=int(pair_center),
+        tau_align_ps=int(tau_align),
     )
 
     return 0

@@ -26,8 +26,13 @@ from jti_extract.cli.extract import (
     _frame_local_bins,
     _plot_png,
     _save_csv_matrix,
+    _time_tags_to_bins,
+    compute_alignment_centered_display_jti,
+    compute_centered_line_jti,
+    compute_multiline_raw_offset_jti,
     compute_jti_diagnostics,
     diagonal_coincidence_profile,
+    iter_pair_chunks_centered,
 )
 from jti_extract.cli.tdc_layer_scan import Tags, load_tags
 
@@ -82,35 +87,8 @@ def discover_default_datasets(data_root: Path) -> list[Dataset]:
     return datasets
 
 
-def _iter_pair_chunks_centered(
-    t_a: np.ndarray,
-    t_b: np.ndarray,
-    *,
-    center_ps: int,
-    half_window_ps: int,
-    chunk_events: int = 100_000,
-) -> Iterable[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    t_b = np.asarray(t_b, dtype=np.int64)
-    center = int(center_ps)
-    half = int(half_window_ps)
-    for start in range(0, int(t_a.size), int(chunk_events)):
-        a = np.asarray(t_a[start : start + int(chunk_events)], dtype=np.int64)
-        left = np.searchsorted(t_b, a + center - half, side="left")
-        right = np.searchsorted(t_b, a + center + half, side="right")
-        pair_counts = right - left
-        total = int(np.sum(pair_counts))
-        if total <= 0:
-            continue
-        a_rep = np.repeat(a, pair_counts)
-        b_vals = np.empty(total, dtype=np.int64)
-        pos = 0
-        for lo, hi in zip(left, right):
-            n = int(hi - lo)
-            if n:
-                b_vals[pos : pos + n] = t_b[lo:hi]
-                pos += n
-        b_vals = b_vals[:pos]
-        yield a_rep[:pos], b_vals, b_vals - a_rep[:pos]
+# Use core version from jti_extract.cli.extract
+_iter_pair_chunks_centered = iter_pair_chunks_centered
 
 
 def compute_delay_histogram_centered(
@@ -233,126 +211,12 @@ def find_delay_peaks(
     return rows
 
 
-def jti_for_centered_line(
-    t_a: np.ndarray,
-    t_b: np.ndarray,
-    *,
-    tau_center_ps: int,
-    half_window_ps: int,
-    dim: int,
-    bin_width_ps: int,
-    frame_origin_ps: float,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    counts = np.zeros((int(dim), int(dim)), dtype=np.float64)
-    total_pairs = 0
-    a_with_pairs = 0
-    max_b_per_a = 0
-    delta_sum = 0.0
-    delta_sq_sum = 0.0
-    for a_rep, b_vals, deltas in _iter_pair_chunks_centered(
-        t_a,
-        t_b,
-        center_ps=int(tau_center_ps),
-        half_window_ps=int(half_window_ps),
-    ):
-        if a_rep.size == 0:
-            continue
-        # Use tau-centered B coordinates so each selected line folds near the main diagonal.
-        b_shifted = b_vals.astype(np.float64, copy=False) - float(tau_center_ps)
-        x = _frame_local_bins(a_rep, bin_width_ps=int(bin_width_ps), frame_bins=int(dim), frame_origin_ps=float(frame_origin_ps))
-        y = _frame_local_bins(b_shifted, bin_width_ps=int(bin_width_ps), frame_bins=int(dim), frame_origin_ps=float(frame_origin_ps))
-        np.add.at(counts, (x, y), 1.0)
-        total_pairs += int(a_rep.size)
-        # This centered iterator only yields A events with at least one pair in each chunk.
-        unique_a = np.unique(a_rep)
-        a_with_pairs += int(unique_a.size)
-        if unique_a.size:
-            _, per_a = np.unique(a_rep, return_counts=True)
-            max_b_per_a = max(max_b_per_a, int(np.max(per_a)))
-        centered_delta = deltas.astype(np.float64, copy=False) - float(tau_center_ps)
-        delta_sum += float(np.sum(centered_delta))
-        delta_sq_sum += float(np.sum(centered_delta * centered_delta))
-    mean_delta = delta_sum / float(total_pairs) if total_pairs else math.nan
-    var_delta = delta_sq_sum / float(total_pairs) - mean_delta * mean_delta if total_pairs else math.nan
-    meta = {
-        "n_pairs": int(total_pairs),
-        "n_a_with_window_pairs": int(a_with_pairs),
-        "max_b_per_a_in_window": int(max_b_per_a),
-        "tau_center_ps": int(tau_center_ps),
-        "line_half_window_ps": int(half_window_ps),
-        "centered_delta_mean_ps": float(mean_delta) if np.isfinite(mean_delta) else math.nan,
-        "centered_delta_std_ps": float(math.sqrt(max(0.0, var_delta))) if np.isfinite(var_delta) else math.nan,
-    }
-    return counts, meta
+# Use core version from jti_extract.cli.extract
+jti_for_centered_line = compute_centered_line_jti
 
 
-def jti_for_peak_union_raw_offsets(
-    t_a: np.ndarray,
-    t_b: np.ndarray,
-    *,
-    tau_centers_ps: list[int],
-    tau_reference_ps: int,
-    half_window_ps: int,
-    dim: int,
-    bin_width_ps: int,
-    frame_origin_ps: float,
-    require_same_frame: bool = False,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    counts = np.zeros((int(dim), int(dim)), dtype=np.float64)
-    total_pairs = 0
-    per_line_pairs: dict[str, int] = {}
-    used_centers: list[int] = []
-    for tau in tau_centers_ps:
-        line_pairs = 0
-        for a_rep, b_vals, _ in _iter_pair_chunks_centered(
-            t_a,
-            t_b,
-            center_ps=int(tau),
-            half_window_ps=int(half_window_ps),
-        ):
-            if a_rep.size == 0:
-                continue
-            if require_same_frame:
-                shifted_b = b_vals.astype(np.float64, copy=False) - float(tau_reference_ps)
-                gx = np.floor((a_rep.astype(np.float64, copy=False) - float(frame_origin_ps)) / float(bin_width_ps)).astype(np.int64)
-                gy = np.floor((shifted_b - float(frame_origin_ps)) / float(bin_width_ps)).astype(np.int64)
-                fx = np.floor_divide(gx, int(dim))
-                fy = np.floor_divide(gy, int(dim))
-                keep = fx == fy
-                if not np.any(keep):
-                    continue
-                x = np.mod(gx[keep], int(dim)).astype(np.int64, copy=False)
-                y = np.mod(gy[keep], int(dim)).astype(np.int64, copy=False)
-                line_pairs += int(np.count_nonzero(keep))
-            else:
-                x = _frame_local_bins(
-                    a_rep,
-                    bin_width_ps=int(bin_width_ps),
-                    frame_bins=int(dim),
-                    frame_origin_ps=float(frame_origin_ps),
-                )
-                # Shift only by the display reference so all selected sidebands can
-                # appear on one side while preserving their relative separations.
-                y = _frame_local_bins(
-                    b_vals.astype(np.float64, copy=False) - float(tau_reference_ps),
-                    bin_width_ps=int(bin_width_ps),
-                    frame_bins=int(dim),
-                    frame_origin_ps=float(frame_origin_ps),
-                )
-                line_pairs += int(a_rep.size)
-            np.add.at(counts, (x, y), 1.0)
-        per_line_pairs[str(int(tau))] = int(line_pairs)
-        total_pairs += int(line_pairs)
-        used_centers.append(int(tau))
-    return counts, {
-        "n_pairs": int(total_pairs),
-        "tau_centers_ps": used_centers,
-        "tau_reference_ps": int(tau_reference_ps),
-        "line_half_window_ps": int(half_window_ps),
-        "require_same_frame": bool(require_same_frame),
-        "per_line_pairs": per_line_pairs,
-        "note": "Raw-offset multiline JTI: B channel is shifted only by tau_reference_ps, so FPC lines remain as parallel diagonal offsets relative to that reference.",
-    }
+# Use core version from jti_extract.cli.extract
+jti_for_peak_union_raw_offsets = compute_multiline_raw_offset_jti
 
 
 def save_jti_outputs(
@@ -766,55 +630,8 @@ def _ensure_alignment_outputs(
     return alignment_dir
 
 
-def jti_for_alignment_centered_display(
-    t_a: np.ndarray,
-    t_b: np.ndarray,
-    *,
-    selected_offsets: list[dict[str, Any]],
-    tau0_ps: float,
-    center_offset_bin: int,
-    half_window_ps: int,
-    dim: int,
-    bin_width_ps: int,
-    frame_origin_ps: float,
-) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    counts = np.zeros((int(dim), int(dim)), dtype=np.uint64)
-    peak_meta: list[dict[str, Any]] = []
-    for idx, row in enumerate(selected_offsets):
-        tau_rel = float(row.get("tau_rel_ps", 0.0))
-        tau_center = float(tau0_ps) + tau_rel
-        diagonal_offset = int(row.get("diagonal_offset_bin", round(tau_rel / float(bin_width_ps))))
-        display_offset = int(center_offset_bin) + diagonal_offset
-        n_pairs = 0
-        for a_rep, _b_vals, _dt_vals in _iter_pair_chunks_centered(
-            t_a,
-            t_b,
-            center_ps=int(round(tau_center)),
-            half_window_ps=int(half_window_ps),
-        ):
-            x = np.mod(np.floor((a_rep.astype(np.float64) - float(frame_origin_ps)) / float(bin_width_ps)).astype(np.int64), int(dim))
-            y = x + int(display_offset)
-            keep = (y >= 0) & (y < int(dim))
-            if np.any(keep):
-                np.add.at(counts, (x[keep], y[keep]), 1)
-                n_pairs += int(np.count_nonzero(keep))
-        peak_meta.append(
-            {
-                "peak_id": row.get("peak_id", f"p{idx}"),
-                "tau_ps": float(tau_center),
-                "tau_rel_ps": tau_rel,
-                "chosen_bw_ps": float(bin_width_ps),
-                "diagnostic_diagonal_offset_bin": int(diagonal_offset),
-                "display_offset_bin": int(display_offset),
-                "center_offset_bin": int(center_offset_bin),
-                "alignment_error_ps": float(row.get("alignment_error_ps", 0.0) or 0.0),
-                "norm_height": float(row.get("norm_height", 0.0) or 0.0),
-                "fwhm_ps": float(row.get("fwhm_ps", float("nan")) or float("nan")),
-                "fwhm_bins": float(row.get("fwhm_bins", float("nan")) or float("nan")),
-                "n_pairs_plotted": int(n_pairs),
-            }
-        )
-    return counts, peak_meta
+# Use core version from jti_extract.cli.extract
+jti_for_alignment_centered_display = compute_alignment_centered_display_jti
 
 
 def plot_centered_publication_jti(

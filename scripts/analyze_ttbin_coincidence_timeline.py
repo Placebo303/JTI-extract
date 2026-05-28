@@ -44,7 +44,8 @@ def load_ttbin_events(input_path: Path, output_dir: Path, channels: tuple[int, i
 
 
 def frame_local_bins(times_ps: np.ndarray, *, bin_width_ps: int, frame_bins: int) -> np.ndarray:
-    return np.mod(np.floor(np.asarray(times_ps, dtype=np.float64) / float(bin_width_ps)).astype(np.int64), int(frame_bins))
+    # Integer arithmetic to avoid float64 precision loss on large timestamps
+    return np.mod(np.asarray(times_ps, dtype=np.int64) // np.int64(bin_width_ps), int(frame_bins)).astype(np.int64)
 
 
 def apply_diag_filter(

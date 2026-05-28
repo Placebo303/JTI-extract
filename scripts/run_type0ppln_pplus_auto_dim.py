@@ -249,8 +249,8 @@ def estimate_tau0_ps(dt: np.ndarray, bin_width_ps: int) -> float:
 
 def frame_origin_score_for_pairs(pa: np.ndarray, pb_shifted: np.ndarray, dim: int, bin_width_ps: int, frame_origin_ps: float) -> dict[str, Any]:
     """Score one frame origin from paired events without allocating a dense JTI."""
-    x_global = _time_tags_to_bins(pa.astype(np.float64, copy=False), bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
-    y_global = _time_tags_to_bins(pb_shifted.astype(np.float64, copy=False), bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+    x_global = _time_tags_to_bins(pa, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
+    y_global = _time_tags_to_bins(pb_shifted, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
     x_bin = np.mod(x_global, int(dim)).astype(np.int64, copy=False)
     y_bin = np.mod(y_global, int(dim)).astype(np.int64, copy=False)
     total = int(x_bin.size)
@@ -571,8 +571,8 @@ def diag_profiles_for_dim(
     storage: str,
 ) -> dict[str, Any]:
     """Directly accumulate P_plus and P_minus for one dim/frame mapping."""
-    a_shifted = pa.astype(np.float64, copy=False)
-    b_shifted = pb.astype(np.float64, copy=False) - float(tau0_ps)
+    a_shifted = pa  # keep as int64
+    b_shifted = pb - np.int64(int(tau0_ps))
     x_global = _time_tags_to_bins(a_shifted, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
     y_global = _time_tags_to_bins(b_shifted, bin_width_ps=int(bin_width_ps), frame_origin_ps=float(frame_origin_ps))
     x_bin = np.mod(x_global, int(dim)).astype(np.int64, copy=False)

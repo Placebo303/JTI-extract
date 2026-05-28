@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from jti_extract.cli.extract import _jti_from_pairs, _time_tags_to_bins
+from jti_extract.cli.extract import _frame_local_bins, _time_tags_to_bins
 
-__all__ = ["_jti_from_pairs", "_time_tags_to_bins"]
+__all__ = ["_frame_local_bins", "_time_tags_to_bins"]
