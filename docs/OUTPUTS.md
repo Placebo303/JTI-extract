@@ -1,164 +1,82 @@
-# Output Files
+# 输出格式
 
-## Mode A: Single-line JTI Output
+## H_raw_aligned.csv
 
-### H_single_line.csv
+矩阵 CSV，行/列为 bin index。第一行为列标题（空 + 0, 1, 2, ...），每行以行索引开头。
 
-Square count matrix. First row and first column are bin indices. Cell `(i, j)` is the number of accepted pairs where channel A maps to bin `i` and channel B maps to bin `j`.
-
-### schmidt_single_line.json
-
-```json
-{
-  "analysis_mode": "single_line_jti",
-  "K_single_line_raw": 3.45,
-  "purity": 0.29,
-  "n_sv": 15,
-  "total_counts": 17267,
-  "kept_fraction": 0.94,
-  "cross_frame_fraction": 0.03,
-  "edge_rejected_fraction": 0.03,
-  "invalid_count": 0,
-  "residual_tau_diagnostics": {
-    "weighted_mean_residual_tau_ps": -50.0,
-    "weighted_std_residual_tau_ps": 80.0,
-    "offset_min_ps": -200,
-    "offset_max_ps": 200
-  },
-  "result_type": "background-unsubtracted intensity-based Schmidt-like effective mode number",
-  "strict_schmidt_number": false,
-  "uses_complex_phase": false,
-  "background_subtracted": false,
-  "amplitude_proxy": "sqrt(normalized_intensity)"
-}
+```
+,0,1,2,...,127
+0,0.0,0.0,1.0,...
+1,0.0,0.0,0.0,...
+...
 ```
 
-### singular_values.csv
+## H_raw_aligned.npz
 
-| Column | Description |
-|--------|-------------|
-| index | Singular value index |
-| singular_value | Singular value |
-| lambda | Normalized weight (s^2 / sum(s^2)) |
-
-### meta.json
-
-Full extraction metadata including tau0_ps, pair_center_ps, tau_align_ps, residual diagnostics, etc.
-
-## Mode B: BFC/FPC Multi-line Output
-
-### schmidt_results.json
-
-Complete results with all K values, diagnostics, and metadata. Key fields:
-
-| Field | Description |
-|-------|-------------|
-| `analysis_mode` | "bfc_multiline_jti" |
-| `K_global_comb_raw` | Global K over selected comb-support ROI |
-| `K_comb_weight` | Effective number of retained comb components |
-| `K_full_window_greedy_unique_raw` | Operational one-to-one K over full delay range |
-| `K_tooth_raw` | Per-tooth K values |
-| `K_tooth_weighted_mean` | Count-weighted mean of per-tooth K |
-| `tooth_details` | Per-tooth detailed results |
-| `pairing_diagnostics` | Greedy-unique pairing statistics |
-| `residual_tau_diagnostics` | Residual tau statistics |
-
-### summary.csv
-
-Top-level result summary with one row per analysis run.
-
-### pairing_diagnostics.json
-
-Standalone pairing statistics:
-
-```json
-{
-  "comb": {
-    "candidate_count_total": 26656,
-    "accepted_pair_count_total": 26379,
-    "rejected_due_to_a_reuse": 277,
-    "rejected_due_to_b_reuse": 0
-  },
-  "gap": {
-    "candidate_count_total": 4829,
-    "accepted_pair_count_total": 4829,
-    "rejected_due_to_a_reuse": 0,
-    "rejected_due_to_b_reuse": 0
-  },
-  "full_summary": {
-    "candidate_count_comb": 26656,
-    "candidate_count_full": 7378,
-    "candidate_count_gap": 4829,
-    "accepted_pair_count_comb": 26379,
-    "accepted_pair_count_gap": 4829,
-    "accepted_pair_count_full": 31208
-  }
-}
+```python
+np.load("H_raw_aligned.npz")["jti_counts"]  # (dim, dim) float64
+np.load("H_raw_aligned.npz")["dimension"]    # int
+np.load("H_raw_aligned.npz")["bin_width_ps"] # int
+np.load("H_raw_aligned.npz")["frame_origin_ps"] # float
+np.load("H_raw_aligned.npz")["tau_align_ps"] # float
+np.load("H_raw_aligned.npz")["delay_min_ps"] # int
+np.load("H_raw_aligned.npz")["delay_max_ps"] # int
+np.load("H_raw_aligned.npz")["guard_bins"]   # int
 ```
 
-### H_comb.csv / H_full_window.csv
+## H_raw_aligned.png
 
-Square count matrices in the same format as H_single_line.csv.
+viridis 热图，lower origin，x/y 轴为 bin index，colorbar label = "Counts"。
 
-- H_comb: JTI over tooth ROI union
-- H_full_window: JTI over full delay range (comb + gap extension)
+## raw_aligned_meta.json
 
-### tooth_details.csv
+完整 metadata，见 [CLI.md](CLI.md#metadata-字段)。
 
-Per-tooth results:
+关键字段：
+- `count_balance_error`：`accepted_pairs - retained - cross_frame - edge - invalid`，必须为 0
+- `delay_span_exceeds_frame_period`：boolean，delay range 是否超过 frame period
+- `weighted_mean_diag_offset_ps`：加权平均对角线偏移（ps）
+- `weighted_std_diag_offset_ps`：加权标准差对角线偏移（ps）
+- `K_raw_aligned`：Schmidt-like K（`--compute-svd` 时）
+- `purity`：`1/K`（`--compute-svd` 时）
 
-| Column | Description |
-|--------|-------------|
-| peak_id | Peak identifier |
-| tau_raw_ps | Raw delay (t_B - t_A) |
-| tau_residual_ps | Residual delay (tau_raw - tau_align) |
-| roi_half_ps | ROI half-width |
-| fwhm_ps | FWHM from delay histogram |
-| counts_in_roi | Retained counts after edge guard |
-| K_tooth | Per-tooth Schmidt-like K |
-| purity | Per-tooth purity |
-| n_singular_values | Number of singular values |
-| low_count_warning | true if counts < min_counts_warning |
+## residual_tau_histogram.csv
 
-### per_tooth_svd_input_{peak_id}.csv
+| 列 | 说明 |
+|---|---|
+| `residual_tau_ps` | 残差延时 bin 中心（ps） |
+| `counts` | 该 bin 的事件对数 |
 
-Individual per-tooth JTI matrices.
+## residual_tau_histogram.png
 
-### singular_values_H_comb.csv / singular_values_H_full_window.csv
+线图，x 轴 = residual tau (ps)，y 轴 = counts。标注 `residual_tau = 0 ps` 竖线。
+title 中写入 `tau_align_ps` 值。
 
-Singular values and lambda weights for each matrix.
+## summary.csv（`--compute-svd` 时）
 
-## Diagnostic Outputs
-
-### frame_origin_scan_k{K}.csv
-
-Frame origin scan results with score at each origin.
-
-### summary_k_scan.csv
-
-Summary of all k values with diagnostics.
-
-### CV/DV outputs
-
-- `cv_fine{N}ps_k{K}.csv/png`: Fine-bin 2D histogram (diagnostic)
-- `dv_k{K}_bw{BW}ps_dim{D}.csv/png`: Discrete JTI matrix (diagnostic)
-
-These are modulo-wrapped diagnostic outputs, NOT used for SVD/Schmidt analysis.
-
-## TDC Diagnostic Outputs
-
-### tdc_residue
-
-- Residue histograms, plots, and summary files
-- See `docs/DIAGNOSTICS_40PS.md` for interpretation
-
-### tdc_layer_scan
-
-- Layer scan CSV summaries, period scan plots, pairing modulo plots
-- See `docs/DIAGNOSTICS_40PS.md` for interpretation
-
-### coincidence_timeline
-
-- `coincidence_timeline.csv`: acquisition-time bins with counts and rate
-- `coincidence_timeline.png`: rate vs acquisition time
-- `coincidence_timeline_summary.json`: parameters and statistics
+| 列 | 说明 |
+|---|---|
+| `binwidth_ps` | Bin width (ps) |
+| `dimension` | JTI dimension |
+| `frame_period_ps` | `dim * binwidth_ps` |
+| `guard_bins` | Edge guard bins |
+| `guard_ps` | `guard_bins * binwidth_ps` |
+| `delay_min_ps` | Delay window lower bound |
+| `delay_max_ps` | Delay window upper bound |
+| `accepted_pairs_input` | 总配对数 |
+| `retained_in_jti` | 矩阵内保留数 |
+| `retained_fraction` | `retained / accepted` |
+| `cross_frame_rejected` | 跨帧剔除数 |
+| `edge_rejected` | 边缘保护剔除数 |
+| `invalid_bin` | 无效 bin 数 |
+| `count_balance_error` | 计数平衡误差（必须为 0） |
+| `weighted_mean_diag_offset_ps` | 加权平均对角线偏移 |
+| `weighted_std_diag_offset_ps` | 加权标准差对角线偏移 |
+| `K_raw_aligned` | Schmidt-like K |
+| `purity` | `1/K` |
+| `n_singular_values` | 非零奇异值数 |
+| `lambda1` | 第一主成分权重 |
+| `lambda2` | 第二主成分权重 |
+| `lambda3` | 第三主成分权重 |
+| `lambda5_cumsum` | 前 5 主成分累积权重 |
+| `lambda10_cumsum` | 前 10 主成分累积权重 |

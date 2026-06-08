@@ -1,50 +1,26 @@
-# Data Contract
+# 数据格式
 
-## Time Unit
+## 输入文件
 
-All `TimeTag` and timestamp values are treated as picoseconds by project convention.
+### .ttbin 文件
+Swabian TimeTagger 原始时间戳文件。由 TimeTagger 软件生成。
 
-## Channel Semantics
+需要指定 channel A 和 channel B 的 ID（通过 `--raw-ch-a-id` 和 `--raw-ch-b-id`）。
 
-For parsed NPZ input, `Ch` stores logical channel labels. The JTI extractor defaults to `--ch-a 0` and `--ch-b 1`. For TTBIN input, `--raw-ch-a-id` and `--raw-ch-b-id` select hardware channels, then the reader maps them to logical labels.
+### pminus_peaks.csv
+延时分布的 peaks CSV。必须包含以下列：
 
-## NPZ Requirements
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `delay_ps` | float | 延时值（ps） |
+| `counts` | float | 该延时处的计数 |
 
-Required fields:
+脚本只使用 `counts` 最大的峰的 `delay_ps` 来确定 `tau_align_ps`。
+其余列（如 `smoothed_counts`, `relative_to_main`, `bin_index`）会被忽略。
 
-- `Ch`: channel array
-- `TimeTag`: timestamp array in ps
+此 CSV 可以由 `archived/diagnostics/analyze_interchannel_delay.py` 生成，
+也可以由用户手动准备。只要包含 `delay_ps` 和 `counts` 列即可。
 
-Optional fields:
+## 输出文件
 
-- `overflow_types`
-- `missed_events`
-
-## TTBIN Requirements
-
-TTBIN reading requires Swabian Instruments TimeTagger Python bindings. The project does not install these from PyPI. If TimeTagger is unavailable, NPZ and CSV workflows still work.
-
-## Binning Definitions
-
-- `bin_width_ps`: width of one time bin in ps
-- `dimensions`: number of bins per frame and output matrix axis
-- `frame_width_ps`: `bin_width_ps * dimensions`
-- `frame_origin_ps`: shared time origin used before floor division into bins
-
-## Tau Coordinate System
-
-- `delay_ps` in peaks_csv: always `raw_tau = t_B - t_A`
-- `tau_align_ps`: B channel alignment correction. `t_B_corr = t_B - tau_align_ps`
-- `residual_tau = t_B_corr - t_A = delay_ps - tau_align_ps`
-- `pair_center_ps`: pairing window center offset. Pair selection: `|t_B - t_A - pair_center_ps| <= window_ps`
-
-## Pairing Methods
-
-- `all_pairs`: all cross-channel deltas inside the coincidence window
-- `nearest`: nearest event in channel B for each event in channel A within the window
-- `greedy_unique`: sorted candidate pairs by absolute delay, then greedily keeps one-to-one assignments
-- `peak_aware_greedy_unique`: for BFC/FPC, each peak has its own ROI; global greedy ensures each A/B used at most once
-
-## Output Stability
-
-Existing CLI parameter names and output field meanings are treated as compatibility surface. Schema additions should be additive.
+见 [OUTPUTS.md](OUTPUTS.md)。

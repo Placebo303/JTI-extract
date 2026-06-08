@@ -1,111 +1,136 @@
-# CLI Reference
+# CLI 参考
 
-## Mode A: Single-line JTI Extraction
+## jti-raw-aligned（主程序）
 
-**Tool**: `extract_jti.py` or `python -m jti_extract.cli.extract`
+Raw-aligned FPC JTI 提取。只做全局坐标校准，不做 per-tooth ROI 筛选、peak_id 分配、comb line 重排。
 
-### Key Parameters
+### 必需参数
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--ttbin` | required | Path to .ttbin file |
-| `--raw-ch-a-id` | 1 | TimeTagger raw channel id for A |
-| `--raw-ch-b-id` | 3 | TimeTagger raw channel id for B |
-| `--binwidth-ps` | 10 | Bin width in ps |
-| `--dimensions` | 128 | JTI matrix dimension |
-| `--window-ps` | None | Pairing window in ps (overrides k * binwidth_ps) |
-| `--k-values` | 1 | Comma-separated k values (window = k × binwidth) |
-| `--pair-center-ps` | None | Pairing window center offset in ps |
-| `--tau-align-ps` | None | B channel alignment correction for unwrapped SVD |
-| `--tau0-ps` | 0 | Backward-compatible shortcut: sets both --pair-center-ps and --tau-align-ps |
-| `--svd-unwrapped` | true | Enable unwrapped edge-guarded JTI |
+| 参数 | 说明 |
+|------|------|
+| `--ttbin` | Path to `.1.ttbin` 文件 |
+| `--peaks-csv` | Path to `pminus_peaks.csv`（必须有 `delay_ps` 和 `counts` 列） |
+| `--out` | 输出目录 |
+
+### 可选参数 — 坐标校准
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--tau-align-ps` | 自动（最亮峰） | 显式指定 `tau_align_ps`（ps） |
+| `--frame-origin-ps` | 0 | Frame origin（ps） |
+| `--binwidth-ps` | 20 | Bin width（ps） |
+| `--dimensions` | 128 | JTI 矩阵维度 |
 | `--guard-bins` | 2 | Edge guard bins |
-| `--scan-frame-origin` | false | Scan frame_origin and select best |
-| `--out` | required | Output directory |
 
-### Tau Coordinate Handling
+### 可选参数 — Delay Range
 
-- `--pair-center-ps`: shifts the pairing window center. Pair selection: `|t_B - t_A - pair_center_ps| <= window_ps`
-- `--tau-align-ps`: shifts B channel for coordinate alignment. `t_B_corr = t_B - tau_align_ps`
-- `--tau0-ps`: backward-compatible shortcut, sets both above if not explicitly provided
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--delay-min-ps` | 自动 | 全局 residual delay window 下界（ps） |
+| `--delay-max-ps` | 自动 | 全局 residual delay window 上界（ps） |
+| `--delay-window-ps` | 无 | 快捷方式：`delay_min=-W, delay_max=+W` |
 
-Resolution priority:
-```
-pair_center_ps = --pair-center-ps if provided, else --tau0-ps
-tau_align_ps = --tau-align-ps if provided, else --tau0-ps
-```
+优先级：`--delay-min/max-ps` > `--delay-window-ps` > `±(frame_period//2 - guard_ps)`
 
-### Example
+### 可选参数 — TimeTagger 通道
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--raw-ch-a-id` | 2 | TimeTagger channel A |
+| `--raw-ch-b-id` | 3 | TimeTagger channel B |
+
+### 可选参数 — 性能
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--max-events` | 无（全部） | 最大读取事件数 |
+| `--chunk-size` | 50000 | Chunk streaming 配对大小 |
+
+### 可选参数 — SVD
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--compute-svd` | false | 计算 SVD/K 并输出 `summary.csv` |
+
+### 输出文件
+
+| 文件 | 说明 |
+|------|------|
+| `H_raw_aligned.csv` | JTI 矩阵 CSV |
+| `H_raw_aligned.npz` | JTI 矩阵 NPZ（含 metadata） |
+| `H_raw_aligned.png` | JTI 热图（viridis） |
+| `raw_aligned_meta.json` | 完整 metadata |
+| `residual_tau_histogram.csv` | 残差延时直方图 |
+| `residual_tau_histogram.png` | 残差延时直方图 |
+| `summary.csv` | SVD/K 结果（`--compute-svd` 时） |
+
+### 示例
 
 ```bash
-python -m jti_extract.cli.extract \
-  --ttbin "data.1.ttbin" \
-  --raw-ch-a-id 2 --raw-ch-b-id 3 \
-  --binwidth-ps 20 --dimensions 128 \
-  --window-ps 200 \
-  --pair-center-ps 830 --tau-align-ps 830 \
-  --svd-unwrapped --guard-bins 2 \
-  --out "output/"
-```
+# 基本用法（自动 delay range）
+jti-raw-aligned \
+  --ttbin data.1.ttbin \
+  --peaks-csv pminus_peaks.csv \
+  --out results/
 
-## Mode B: BFC/FPC Multi-line Analysis
-
-**Tool**: `compute_fpc_schmidt.py`
-
-### Key Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--ttbin` | required | Path to .ttbin file |
-| `--peaks-csv` | required | Path to peaks CSV (delay_ps = raw_tau) |
-| `--delay-csv` | required | Path to delay histogram CSV |
-| `--raw-ch-a-id` | 2 | TimeTagger raw channel id for A |
-| `--raw-ch-b-id` | 3 | TimeTagger raw channel id for B |
-| `--tau-align-ps` | None | B channel alignment (priority: explicit > peaks_csv > tau0) |
-| `--tau0-ps` | None | Fallback for tau_align_ps |
-| `--binwidth-ps` | 20 | Bin width in ps |
-| `--dimensions` | 128 | JTI matrix dimension |
-| `--guard-bins` | 2 | Edge guard bins |
-| `--min-counts-included` | 500 | Min counts for included summary statistics |
-| `--min-counts-warning` | 10 | Min counts below which low_count_warning is set |
-| `--prominence-fractions` | 0.02,0.04,0.08 | Comma-separated prominence thresholds |
-| `--primary-prominence` | 0.04 | Primary prominence fraction |
-| `--out` | required | Output directory |
-
-### Example
-
-```bash
-python compute_fpc_schmidt.py \
-  --ttbin "data.1.ttbin" \
-  --peaks-csv "pminus_peaks.csv" \
-  --delay-csv "pminus_delay_histogram.csv" \
+# 指定 delay range + SVD
+jti-raw-aligned \
+  --ttbin data.1.ttbin \
+  --peaks-csv pminus_peaks.csv \
   --tau-align-ps 830 \
-  --binwidth-ps 20 --dimensions 128 --guard-bins 2 \
-  --out "output/"
+  --binwidth-ps 40 --dimensions 80 --guard-bins 2 \
+  --delay-min-ps -1500 --delay-max-ps 300 \
+  --raw-ch-a-id 2 --raw-ch-b-id 3 \
+  --compute-svd \
+  --out results/
+
+# 也可以用 module 方式调用
+python -m jti_extract.cli.raw_aligned --ttbin ... --peaks-csv ... --out ...
 ```
 
-## Other Tools
+### Metadata 字段
 
-### Schmidt Number Analysis
+`raw_aligned_meta.json` 包含以下字段：
 
-```bash
-python -m jti_extract.cli.schmidt --input output/ --pattern "*.counts.csv"
-```
-
-### TDC Residue Diagnostics
-
-```bash
-python -m jti_extract.cli.tdc_residue --ttbin data.1.ttbin --ch1 1 --ch3 3 --out output/
-```
-
-### TDC Layer Scan
-
-```bash
-python -m jti_extract.cli.tdc_layer_scan --ttbin data.1.ttbin --ch-a 1 --ch-b 3 --window-ps 1000 --out output/
-```
-
-### Coincidence Timeline
-
-```bash
-python scripts/analyze_ttbin_coincidence_timeline.py --input data.1.ttbin --channels 2 3 --coinc-window-ps 200 --output-dir output/
+```json
+{
+  "analysis_mode": "raw_aligned_fpc_jti",
+  "pairing_mode": "global_residual_delay_window",
+  "tau_align_ps": 830.0,
+  "tau_align_source": "brightest_peak",
+  "frame_origin_ps": 0,
+  "binwidth_ps": 40,
+  "dimension": 80,
+  "frame_period_ps": 3200,
+  "guard_bins": 2,
+  "delay_min_ps": -1500,
+  "delay_max_ps": 300,
+  "delay_span_ps": 1800,
+  "delay_span_exceeds_frame_period": false,
+  "delay_span_warning": null,
+  "background_subtracted": false,
+  "tooth_roi_filtered": false,
+  "line_rearranged": false,
+  "peak_id_assigned": false,
+  "per_tooth_matrix_generated": false,
+  "raw_noise_preserved": true,
+  "accepted_pairs_input": 41947,
+  "retained_in_jti": 36083,
+  "cross_frame_rejected": 4050,
+  "edge_rejected": 1814,
+  "invalid_bin": 0,
+  "count_balance_error": 0,
+  "weighted_mean_diag_offset_ps": -319.64,
+  "weighted_std_diag_offset_ps": 348.84,
+  "max_diag_offset_bins": 75,
+  "max_diag_offset_ps": 1500,
+  "K_raw_aligned": 4.6299,
+  "purity": 0.215989,
+  "n_singular_values": 92,
+  "lambda1": 0.358908,
+  "lambda2": 0.248119,
+  "lambda3": 0.136365,
+  "lambda5_cumsum": 0.838533,
+  "lambda10_cumsum": 0.925180
+}
 ```

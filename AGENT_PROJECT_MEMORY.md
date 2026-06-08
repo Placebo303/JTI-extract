@@ -1,49 +1,50 @@
-# AGENT_PROJECT_MEMORY.md
+# Agent Project Memory
 
-## Project: JTI Extract and BFC/FPC Schmidt-like Analysis
+## 唯一活跃脚本
+- `src/jti_extract/cli/raw_aligned.py` — Raw-aligned FPC JTI 提取
+- `scripts/run_raw_aligned_scan.py` — 参数扫描
 
-### Purpose
-
-Extract Joint Time-bin Intensity (JTI) matrices from timetag data and compute Schmidt-like effective mode numbers for:
-- **Mode A**: Single-line SPDC JTI analysis
-- **Mode B**: BFC/FPC multi-delay-peak analysis with peak-aware greedy-unique pairing
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/jti_extract/cli/extract.py` | Mode A: single-line JTI extraction |
-| `compute_fpc_schmidt.py` | Mode B: BFC/FPC multi-line analysis |
-| `src/jti_extract/cli/schmidt.py` | Schmidt number computation |
-| `src/jti_extract/cli/tdc_layer_scan.py` | TDC layer scan diagnostics |
-| `tests/` | Unit tests (35 tests) |
-
-### Core Algorithm Rules (DO NOT MODIFY)
-
-1. True-coordinate JTI (no synthetic idler axis)
-2. Unwrapped non-cyclic JTI for SVD
-3. Edge guard (default 2 bins)
-4. No modulo-wrapped JTI for SVD
-5. No background subtraction
-6. No float64 binning for 17-digit ps timestamps
-7. No np.clip on bin indices
-8. Peak-aware greedy-unique pairing for BFC/FPC
-9. H_full_window = accepted_comb + accepted_gap
-10. K_comb_weight uses retained counts in H_tooth
-
-### All K Values Are
-
-```
-background-unsubtracted
-intensity-based
-Schmidt-like effective mode number
-A = sqrt(normalized intensity)
-NOT strict complex-amplitude Schmidt number
+## 调用方式
+```bash
+jti-raw-aligned --ttbin ... --peaks-csv ... --out ...
+python -m jti_extract.cli.raw_aligned --ttbin ... --peaks-csv ... --out ...
+python scripts/run_raw_aligned_scan.py
 ```
 
-### Current Status
+## 核心函数
+- `build_raw_aligned_jti()` — chunk streaming 配对 + 帧坐标 binning
+- `infer_tau_align_brightest()` — 从 peaks CSV 自动确定 tau_align_ps
+- `_compute_svd_k()` — SVD/K 计算
+- `_compute_diagonal_diagnostics()` — 对角线偏移诊断
+- `_compute_diagonal_diagnostics()` — count balance 验证
 
-- Version: v0.1.0 (JTI-stage only)
-- Tests: 35/35 passing
-- GitHub: https://github.com/Placebo303/JTI-extract.git
-- Archived files: `archived/` (P_plus analysis, legacy configs)
+## 数据流
+```
+.ttbin + pminus_peaks.csv
+  → load_tags() → t_a, t_b
+  → infer_tau_align_brightest() → tau_align_ps
+  → build_raw_aligned_jti() → H, meta
+  → _compute_svd_k() → K, purity, lambdas (optional)
+  → save outputs
+```
+
+## 关键约束
+- 不做 per-tooth ROI 筛选
+- 不分配 peak_id
+- 不做 comb line 重排
+- 不做背景扣除
+- 保留原始噪声
+
+## 已 Archive（archived/）
+- mode_a/ — Mode A (extract.py)
+- mode_b/ — Mode B (compute_fpc_schmidt.py)
+- diagnostics/ — 诊断工具
+- batch_runners/ — 旧批处理
+
+## library 依赖
+- `jti_extract.cli.tdc_layer_scan.load_tags` — 加载 .ttbin
+
+## 测试
+- `tests/test_binning.py` — 保留
+- `tests/test_io_contract.py` — 保留
+- 其余测试已 archive

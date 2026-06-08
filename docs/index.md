@@ -1,12 +1,9 @@
 # Documentation Index
 
-- [README.md](../README.md): Project overview, installation, usage examples, validation criteria
-- [CLI.md](CLI.md): Command-line reference for Mode A, Mode B, and diagnostic tools
-- [OUTPUTS.md](OUTPUTS.md): Output file formats and schemas
-- [WORKFLOWS.md](WORKFLOWS.md): Common analysis workflows
-- [SCHMIDT_ANALYSIS.md](SCHMIDT_ANALYSIS.md): Schmidt-like algorithm, physical interpretation, validation
-- [DATA_CONTRACT.md](DATA_CONTRACT.md): Input data format requirements
-- [DIAGNOSTICS_40PS.md](DIAGNOSTICS_40PS.md): TDC 40ps residue diagnostics interpretation
-- [COINCIDENCE_TIMELINE.md](COINCIDENCE_TIMELINE.md): Acquisition-time coincidence stability diagnostic
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): Common errors and solutions
-- [TOKEN_SUMMARY.md](TOKEN_SUMMARY.md): Compact handoff context for AI assistants
+- [CLI 参考](CLI.md) — `jti-raw-aligned` 完整参数说明
+- [工作流](WORKFLOWS.md) — 常见分析流程
+- [输出格式](OUTPUTS.md) — 输出文件 schema
+- [SVD/K 算法](SCHMIDT_ANALYSIS.md) — Schmidt-like K 计算
+- [数据格式](DATA_CONTRACT.md) — 输入数据要求
+- [故障排除](TROUBLESHOOTING.md) — 常见错误和解决方案
+- [Token Summary](TOKEN_SUMMARY.md) — AI 上下文摘要

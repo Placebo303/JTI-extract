@@ -1,47 +1,39 @@
 # Changelog
 
-## v0.2.0 - Pseudo-CV Heatmap & Batch Analysis
+## [0.3.0] - 2026-06-08
 
 ### Added
-- `scripts/pseudo_cv_from_modeb.py`: Pseudo-CV heatmap generation from modeB peak-aware pairing.
-  - Reuses modeB's adaptive per-peak ROI pairing + greedy-unique constraint.
-  - Bins accepted pairs into a fine-grained 2D histogram at configurable resolution.
-  - `--fine-bin-ps` parameter (default 20ps) controls fine bin size.
-  - Axes labeled in DV-bin units (0→dim-1), directly corresponding to the DV matrix.
-  - Local ROI override with 0.6× multiplier for wider coverage.
-- `scripts/run_bfc_40_50_batch.py`: Batch runner for Mode B (FPC Schmidt) + CV 5ps extraction.
-  - Runs compute_fpc_schmidt.py (6 runs: 3 angles × 2 binwidths).
-  - Runs extract.py CV 5ps extraction (6 runs).
-- `scripts/run_pseudo_cv_batch.py`: Batch runner for pseudo-CV generation.
-  - Runs pseudo_cv_from_modeb.py (6 runs: 3 angles × 2 binwidths).
+- `src/jti_extract/cli/raw_aligned.py`: Raw-aligned FPC JTI extraction mode
+  - Global residual-delay window pairing (no per-tooth ROI)
+  - Chunk-streamed memory-efficient pairing
+  - SVD/K computation with `--compute-svd`
+  - Diagonal diagnostics and count balance verification
+  - `count_balance_error`, `delay_span_exceeds_frame_period` in metadata
+- `scripts/run_raw_aligned_scan.py`: Batch parameter scan (binwidth × N)
+- Entry point: `jti-raw-aligned`
 
-## v0.1.0 - JTI-stage Schmidt-like Analysis Stable Version
+### Archived
+- Mode A (`extract_jti.py`, `compute_jti_schmidt.py`, etc.) → `archived/mode_a/`
+- Mode B (`compute_fpc_schmidt.py`, `run_fpc_multiline_analysis.py`) → `archived/mode_b/`
+- Diagnostic tools (`analyze_*.py`, `jti_delay_alignment.py`) → `archived/diagnostics/`
+- Batch runners (`run_bfc_*.py`, `run_pseudo_*.py`) → `archived/batch_runners/`
+
+### Changed
+- Primary extraction mode is now raw-aligned FPC JTI
+- All documentation updated for raw-aligned mode
+- Removed legacy CLI entry points (jti-extract, jti-schmidt, jti-tdc-residue, jti-tdc-layer-scan)
+- Version bumped to 0.3.0
+
+## [0.2.0] - 2026-05-26
 
 ### Added
-- Single-line JTI Schmidt-like analysis (Mode A) via `extract_jti.py`.
-- BFC/FPC peak-aware greedy-unique multi-line JTI analysis (Mode B) via `compute_fpc_schmidt.py`.
-- True-coordinate unwrapped edge-guarded non-cyclic JTI construction.
-- `--pair-center-ps` and `--tau-align-ps` parameters for proper tau coordinate handling.
-- `--window-ps` direct parameter (overrides `k * binwidth_ps`).
-- `K_global_comb_raw`, `K_comb_weight`, `K_tooth_m`, `K_full_window_greedy_unique_raw` metrics.
-- `K_tooth_weighted_mean` (count-weighted mean of per-tooth K values).
-- Singular value CSV outputs for H_comb and H_full_window.
-- Standalone `pairing_diagnostics.json` output.
-- `summary.csv` top-level result summary.
-- Residual tau diagnostics (weighted mean, std, min, max).
-- `analysis_stage`, `future_stage`, `interpretation` meta fields.
-- Sensitivity analysis across multiple prominence thresholds.
+- Mode B: BFC/FPC multi-line Schmidt analysis
+- Pseudo-CV batch processing
+- TDC layer scan diagnostics
 
-### Fixed
-- Removed 6 instances of `np.clip` on bin indices in `extract.py`; replaced with bounds check + reject + `invalid_count`.
-- Fixed float64 precision-sensitive binning in `tdc_layer_scan.py` and `run_fpc_multiline_analysis.py`.
-- Fixed tau alignment vs pair center separation (previously conflated under `tau0_ps`).
-- Fixed H_full_window construction: now uses comb + gap extension (`accepted_comb + accepted_gap`), not independent greedy.
-- Fixed NaN propagation in `K_tooth_weighted_mean` when some teeth have zero counts.
-- Fixed broken imports in `core/binning.py` and `core/pairing.py`.
+## [0.1.0] - 2026-04-10
 
-### Notes
-- All K values are `background-unsubtracted, intensity-based Schmidt-like effective mode numbers` using `A = sqrt(normalized intensity)`.
-- Current version is JTI-stage temporal-domain characterization only.
-- JSI-stage frequency-domain characterization will be added in a future version.
-- This is NOT a full BFC time-frequency Schmidt decomposition.
+### Added
+- Mode A: Single-line JTI extraction (CV/DV/SVD)
+- Frame origin scanning
+- Schmidt number computation

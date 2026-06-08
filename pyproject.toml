@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jti-extract"
-version = "0.1.0"
-description = "Reproducible JTI extraction, TDC residue diagnostics, and Schmidt-number analysis tools."
+version = "0.3.0"
+description = "Raw-aligned FPC JTI extraction from TimeTagger .ttbin data."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
@@ -19,10 +19,7 @@ dev = ["pytest"]
 # not reliably installable from PyPI. See docs/TROUBLESHOOTING.md.
 
 [project.scripts]
-jti-extract = "jti_extract.cli.extract:main"
-jti-schmidt = "jti_extract.cli.schmidt:main"
-jti-tdc-residue = "jti_extract.cli.tdc_residue:main"
-jti-tdc-layer-scan = "jti_extract.cli.tdc_layer_scan:main"
+jti-raw-aligned = "jti_extract.cli.raw_aligned:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
