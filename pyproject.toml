@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jti-extract"
-version = "0.3.0"
-description = "Raw-aligned FPC JTI extraction from TimeTagger .ttbin data."
+version = "0.4.0"
+description = "Reproducible raw-aligned JTI extraction and TimeTagger diagnostics."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
@@ -20,6 +20,9 @@ dev = ["pytest"]
 
 [project.scripts]
 jti-raw-aligned = "jti_extract.cli.raw_aligned:main"
+jti-extract = "jti_extract.cli.extract:main"
+jti-tdc-residue = "jti_extract.cli.tdc_residue:main"
+jti-tdc-layer-scan = "jti_extract.cli.tdc_layer_scan:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

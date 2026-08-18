@@ -110,6 +110,81 @@ def infer_tau_align_brightest(
     )
 
 
+def same_frame_delay_range_ps(dim: int, bw: int, guard_bins: int) -> tuple[int, int]:
+    """Return the delay range that covers all same-frame, guard-kept JTI bins."""
+    usable_bins = int(dim) - 2 * int(guard_bins)
+    if usable_bins <= 0:
+        raise ValueError(f"dimension ({dim}) must be larger than 2*guard_bins ({2 * int(guard_bins)})")
+    max_abs_ps = usable_bins * int(bw)
+    return -max_abs_ps, max_abs_ps
+
+
+def detect_residual_peaks(
+    bin_centers: np.ndarray,
+    counts: np.ndarray,
+    *,
+    min_relative_height: float = 0.05,
+) -> list[dict[str, Any]]:
+    """Return separated local maxima in a residual-delay histogram.
+
+    This deliberately uses one-bin local maxima: the histogram bin width is the
+    analysis bin width, so peak merging is left to the explicit peak window.
+    """
+    if bin_centers.size != counts.size:
+        raise ValueError("bin_centers and counts must have the same length")
+    if not 0.0 <= min_relative_height <= 1.0:
+        raise ValueError("min_relative_height must be in [0, 1]")
+    if counts.size < 3 or int(np.max(counts, initial=0)) == 0:
+        return []
+    threshold = float(np.max(counts)) * min_relative_height
+    peaks: list[dict[str, Any]] = []
+    for i in range(1, counts.size - 1):
+        if counts[i] >= threshold and counts[i] > counts[i - 1] and counts[i] >= counts[i + 1]:
+            peaks.append({"delay_ps": float(bin_centers[i]), "counts": int(counts[i])})
+    return peaks
+
+
+def _non_overlapping_peak_windows(
+    selected: list[tuple[int, dict[str, Any]]],
+    detected: list[dict[str, Any]],
+    *,
+    requested_half_window_ps: int | None,
+    histogram_binwidth_ps: int,
+) -> list[tuple[int, dict[str, Any], int, int, str]]:
+    """Choose disjoint residual-delay windows for independently reported peaks."""
+    centers = [int(round(peak["delay_ps"])) for peak in detected]
+    if requested_half_window_ps is None:
+        windows: list[tuple[int, dict[str, Any], int, int, str]] = []
+        for index, peak in selected:
+            separations = [abs(centers[index] - centers[j]) for j in range(len(centers)) if j != index]
+            if not separations:
+                half_window = max(1, histogram_binwidth_ps)
+            else:
+                # Leave one histogram-bin gap between neighbouring inclusive windows.
+                half_window = (min(separations) - histogram_binwidth_ps) // 2
+                if half_window <= 0:
+                    raise ValueError(
+                        "Detected residual peaks are not sufficiently separated for independent JTI extraction; "
+                        "use a coarser residual histogram or select a resolved peak set."
+                    )
+            center = centers[index]
+            windows.append((index, peak, center - half_window, center + half_window, "nearest_peak_midpoint"))
+    else:
+        if requested_half_window_ps <= 0:
+            raise ValueError("--peak-window-ps must be positive")
+        windows = [
+            (index, peak, centers[index] - requested_half_window_ps, centers[index] + requested_half_window_ps,
+             "explicit")
+            for index, peak in selected
+        ]
+
+    ordered = sorted(windows, key=lambda item: item[2])
+    for previous, current in zip(ordered, ordered[1:]):
+        if current[2] <= previous[3]:
+            raise ValueError("Per-peak residual-delay windows overlap; reduce --peak-window-ps or select fewer peaks.")
+    return windows
+
+
 # ---------------------------------------------------------------------------
 # Core: raw-aligned JTI construction (chunk streaming)
 # ---------------------------------------------------------------------------
@@ -366,6 +441,76 @@ def _plot_residual_tau_histogram(
     plt.close(fig)
 
 
+def _save_raw_aligned_artifacts(
+    out_dir: Path,
+    H: np.ndarray,
+    jti_meta: dict[str, Any],
+    *,
+    bw: int,
+    dim: int,
+    origin_ps: int,
+    guard_bins: int,
+    tau_align_ps: float,
+    tau_align_source: str,
+    delay_min_ps: int,
+    delay_max_ps: int,
+    frame_period_ps: int,
+    input_meta: dict[str, Any],
+    peak_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write one independently reproducible JTI result directory."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv_matrix(out_dir / "H_raw_aligned.csv", H)
+    np.savez_compressed(
+        str(out_dir / "H_raw_aligned.npz"), jti_counts=H, dimension=dim,
+        bin_width_ps=bw, frame_origin_ps=origin_ps, tau_align_ps=tau_align_ps,
+        delay_min_ps=delay_min_ps, delay_max_ps=delay_max_ps, guard_bins=guard_bins,
+    )
+    _plot_png(out_dir / "H_raw_aligned.png", H, title="Raw-aligned FPC JTI")
+
+    edges = jti_meta["tau_hist_bin_edges"]
+    hist = jti_meta["tau_hist_counts"]
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    _write_csv_rows(
+        out_dir / "residual_tau_histogram.csv", ["residual_tau_ps", "counts"],
+        [{"residual_tau_ps": float(c), "counts": int(n)} for c, n in zip(centers, hist)],
+    )
+    _plot_residual_tau_histogram(out_dir / "residual_tau_histogram.png", centers, hist,
+                                 tau_align_ps=tau_align_ps)
+
+    count_balance_error = (jti_meta["accepted_pairs_input"] - jti_meta["retained_in_jti"]
+                           - jti_meta["cross_frame_rejected"] - jti_meta["edge_rejected"]
+                           - jti_meta["invalid_bin"])
+    meta: dict[str, Any] = {
+        "analysis_mode": "raw_aligned_fpc_jti",
+        "pairing_mode": "all_ordered_a_b_pairs_inclusive_residual_delay_window",
+        "time_unit": "ps", "normalization": "none",
+        "tau_align_ps": tau_align_ps, "tau_align_source": tau_align_source,
+        "frame_origin_ps": origin_ps, "binwidth_ps": bw, "dimension": dim,
+        "frame_period_ps": frame_period_ps, "guard_bins": guard_bins,
+        "delay_min_ps": delay_min_ps, "delay_max_ps": delay_max_ps,
+        "background_subtracted": False, "peaks_merged": False,
+        "accepted_pairs_input": jti_meta["accepted_pairs_input"],
+        "retained_in_jti": jti_meta["retained_in_jti"],
+        "cross_frame_rejected": jti_meta["cross_frame_rejected"],
+        "edge_rejected": jti_meta["edge_rejected"], "invalid_bin": jti_meta["invalid_bin"],
+        "count_balance_error": count_balance_error, **_compute_diagonal_diagnostics(H, bw),
+        "input": input_meta,
+    }
+    if peak_info:
+        meta["peak"] = peak_info
+    (out_dir / "raw_aligned_meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8",
+    )
+    return meta
+
+
+def _input_summary(tag_meta: dict[str, Any]) -> dict[str, Any]:
+    """Keep reproducibility-relevant TimeTagger input facts in result metadata."""
+    fields = ("ttbin", "ch_a", "ch_b", "max_events", "n_events_read", "n_ch_a", "n_ch_b", "span_ps", "span_s")
+    return {field: tag_meta.get(field) for field in fields}
+
+
 # ---------------------------------------------------------------------------
 # Main analysis
 # ---------------------------------------------------------------------------
@@ -380,6 +525,9 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
     origin_ps = int(args.frame_origin_ps)
     chunk_size = int(args.chunk_size)
 
+    frame_period_ps = dim * bw
+    recommended_delay_min_ps, recommended_delay_max_ps = same_frame_delay_range_ps(dim, bw, guard_bins)
+
     # --- Delay range resolution ---
     if args.delay_min_ps is not None and args.delay_max_ps is not None:
         delay_min_ps = int(args.delay_min_ps)
@@ -388,27 +536,37 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         w = int(args.delay_window_ps)
         delay_min_ps, delay_max_ps = -w, w
     else:
-        frame_period_ps = dim * bw
-        guard_ps = guard_bins * bw
-        half_margin = frame_period_ps // 2 - guard_ps
-        delay_min_ps, delay_max_ps = -half_margin, half_margin
+        delay_min_ps, delay_max_ps = recommended_delay_min_ps, recommended_delay_max_ps
         print(
             f"NOTE: No --delay-min-ps/--delay-max-ps or --delay-window-ps specified.\n"
             f"      Using default delay range [{delay_min_ps}, {delay_max_ps}] ps.\n"
-            f"      Consider inspecting residual_tau_histogram.png and setting\n"
-            f"      --delay-min-ps / --delay-max-ps explicitly for optimal range."
+            f"      This covers all same-frame JTI offsets after edge guard."
         )
 
-    frame_period_ps = dim * bw
     delay_span_ps = delay_max_ps - delay_min_ps
     delay_span_warning: str | None = None
-    if delay_span_ps >= frame_period_ps:
+    if delay_min_ps < recommended_delay_min_ps or delay_max_ps > recommended_delay_max_ps:
         delay_span_warning = (
-            f"delay_span_ps ({delay_span_ps}) >= frame_period_ps ({frame_period_ps}), "
-            f"expect heavy cross-frame rejection"
+            f"delay range [{delay_min_ps}, {delay_max_ps}] ps is wider than same-frame "
+            f"JTI coverage [{recommended_delay_min_ps}, {recommended_delay_max_ps}] ps; "
+            "extra candidates must be rejected by the same-frame filter"
         )
         warnings.warn(delay_span_warning, stacklevel=2)
         print(f"WARNING: {delay_span_warning}")
+
+    delay_clips_same_frame_jti = (
+        delay_min_ps > recommended_delay_min_ps
+        or delay_max_ps < recommended_delay_max_ps
+    )
+    delay_clip_warning: str | None = None
+    if delay_clips_same_frame_jti:
+        delay_clip_warning = (
+            f"delay range [{delay_min_ps}, {delay_max_ps}] ps is narrower than same-frame "
+            f"JTI coverage [{recommended_delay_min_ps}, {recommended_delay_max_ps}] ps; "
+            "large diagonal offsets will be clipped"
+        )
+        warnings.warn(delay_clip_warning, stacklevel=2)
+        print(f"WARNING: {delay_clip_warning}")
 
     # --- Load timetags ---
     ttbin = Path(args.ttbin)
@@ -417,12 +575,82 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
     if tags.t_a.size == 0 or tags.t_b.size == 0:
         raise RuntimeError(f"No events found in {ttbin}")
     print(f"Loaded {tags.t_a.size:,} A events, {tags.t_b.size:,} B events from {ttbin.name}")
+    input_meta = _input_summary(tags.meta)
 
     # --- Resolve tau_align_ps ---
     peaks_csv = Path(args.peaks_csv)
     tau_align_ps, tau_align_source = infer_tau_align_brightest(peaks_csv, args.tau_align_ps)
     print(f"tau_align_ps = {tau_align_ps:.0f} ps (source: {tau_align_source})")
     print(f"Delay range: [{delay_min_ps}, {delay_max_ps}] ps  (span = {delay_span_ps} ps)")
+
+    peak_mode = getattr(args, "peak_mode", "single")
+    if peak_mode != "single":
+        # First use the requested global window only to catalogue resolved peaks.
+        # Each selected peak is then counted afresh in its own, unmerged window.
+        _, discovery = build_raw_aligned_jti(
+            tags.t_a, tags.t_b, tau_align_ps, bw=bw, dim=dim, origin_ps=origin_ps,
+            guard_bins=guard_bins, delay_min_ps=delay_min_ps, delay_max_ps=delay_max_ps,
+            chunk_size=chunk_size,
+        )
+        edges = discovery["tau_hist_bin_edges"]
+        centers = (edges[:-1] + edges[1:]) / 2.0
+        detected = detect_residual_peaks(
+            centers, discovery["tau_hist_counts"],
+            min_relative_height=float(getattr(args, "peak_min_relative_height", 0.05)),
+        )
+        detected.sort(key=lambda p: p["delay_ps"])
+        if peak_mode == "selected":
+            requested = getattr(args, "peak_indices", None)
+            if not requested:
+                raise ValueError("--peak-indices is required with --peak-mode selected")
+            try:
+                indices = [int(x.strip()) for x in requested.split(",") if x.strip()]
+            except ValueError as exc:
+                raise ValueError("--peak-indices must be comma-separated integers") from exc
+            if not indices or min(indices) < 0 or max(indices) >= len(detected):
+                raise ValueError(f"--peak-indices must be within 0..{len(detected) - 1}")
+            selected = [(i, detected[i]) for i in indices]
+        else:
+            selected = list(enumerate(detected))
+        if not selected:
+            raise RuntimeError("No residual-delay peaks found; lower --peak-min-relative-height or widen delay range")
+
+        requested_peak_window = getattr(args, "peak_window_ps", None)
+        peak_windows = _non_overlapping_peak_windows(
+            selected, detected,
+            requested_half_window_ps=None if requested_peak_window is None else int(requested_peak_window),
+            histogram_binwidth_ps=bw,
+        )
+
+        catalog: list[dict[str, Any]] = []
+        peak_root = out_dir / "peaks"
+        for output_index, (detected_index, peak, peak_min, peak_max, window_source) in enumerate(peak_windows):
+            center = int(round(peak["delay_ps"]))
+            H_peak, peak_meta = build_raw_aligned_jti(
+                tags.t_a, tags.t_b, tau_align_ps, bw=bw, dim=dim, origin_ps=origin_ps,
+                guard_bins=guard_bins, delay_min_ps=peak_min, delay_max_ps=peak_max,
+                chunk_size=chunk_size,
+            )
+            peak_info = {"catalog_index": detected_index, "center_ps": center,
+                         "half_window_ps": (peak_max - peak_min) // 2,
+                         "window_min_ps": peak_min, "window_max_ps": peak_max,
+                         "window_source": window_source, "histogram_peak_counts": peak["counts"]}
+            result_dir = peak_root / f"peak_{output_index:03d}"
+            result_meta = _save_raw_aligned_artifacts(
+                result_dir, H_peak, peak_meta, bw=bw, dim=dim, origin_ps=origin_ps,
+                guard_bins=guard_bins, tau_align_ps=tau_align_ps, tau_align_source=tau_align_source,
+                delay_min_ps=peak_min, delay_max_ps=peak_max, frame_period_ps=frame_period_ps,
+                input_meta=input_meta,
+                peak_info=peak_info,
+            )
+            catalog.append({**peak_info, "output_directory": str(result_dir.relative_to(out_dir)),
+                            "retained_in_jti": result_meta["retained_in_jti"]})
+        _write_csv_rows(out_dir / "peak_catalog.csv",
+                        ["catalog_index", "center_ps", "half_window_ps", "window_min_ps", "window_max_ps",
+                         "window_source", "histogram_peak_counts",
+                         "output_directory", "retained_in_jti"], catalog)
+        return {"analysis_mode": "raw_aligned_fpc_jti", "peak_mode": peak_mode,
+                "tau_align_ps": tau_align_ps, "peak_count": len(catalog), "peaks": catalog}
 
     # --- Build raw-aligned JTI ---
     H, jti_meta = build_raw_aligned_jti(
@@ -490,7 +718,9 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
 
     raw_aligned_meta = {
         "analysis_mode": "raw_aligned_fpc_jti",
-        "pairing_mode": "global_residual_delay_window",
+        "pairing_mode": "all_ordered_a_b_pairs_inclusive_residual_delay_window",
+        "time_unit": "ps",
+        "normalization": "none",
         "tau_align_ps": tau_align_ps,
         "tau_align_source": tau_align_source,
         "frame_origin_ps": origin_ps,
@@ -501,6 +731,10 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         "delay_min_ps": delay_min_ps,
         "delay_max_ps": delay_max_ps,
         "delay_span_ps": delay_span_ps,
+        "recommended_delay_min_ps": recommended_delay_min_ps,
+        "recommended_delay_max_ps": recommended_delay_max_ps,
+        "delay_clips_same_frame_jti": delay_clips_same_frame_jti,
+        "delay_clip_warning": delay_clip_warning,
         "delay_span_exceeds_frame_period": delay_span_ps >= frame_period_ps,
         "delay_span_warning": delay_span_warning,
         "background_subtracted": False,
@@ -509,6 +743,7 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         "peak_id_assigned": False,
         "per_tooth_matrix_generated": False,
         "raw_noise_preserved": True,
+        "input": input_meta,
         "accepted_pairs_input": jti_meta["accepted_pairs_input"],
         "retained_in_jti": jti_meta["retained_in_jti"],
         "cross_frame_rejected": jti_meta["cross_frame_rejected"],
@@ -612,6 +847,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--delay-window-ps", type=int, default=None,
                     help="Shorthand: sets delay_min=-W, delay_max=+W.")
 
+    # Multi-peak residual-delay extraction (microcavity / frequency-bin data)
+    ap.add_argument("--peak-mode", choices=["single", "auto", "selected"], default="single",
+                    help=("single keeps the original global window; auto writes one JTI per detected peak; "
+                          "selected uses --peak-indices from that detected catalogue."))
+    ap.add_argument("--peak-indices", default=None,
+                    help="Comma-separated residual-peak catalogue indices for --peak-mode selected.")
+    ap.add_argument("--peak-window-ps", type=int, default=None,
+                    help="Half-width of each per-peak residual-delay window (default: delay-window or 2 bins).")
+    ap.add_argument("--peak-min-relative-height", type=float, default=0.05,
+                    help="Auto-detection local-maximum threshold relative to the brightest peak.")
+
     # TimeTagger channels
     ap.add_argument("--raw-ch-a-id", type=int, default=2,
                     help="TimeTagger channel A.")
@@ -634,9 +880,12 @@ def main(argv: list[str] | None = None) -> int:
     meta = run_raw_aligned(args)
 
     print("\n=== Raw-Aligned FPC JTI ===")
-    print(f"  tau_align_ps = {meta['tau_align_ps']:.0f} ({meta['tau_align_source']})")
-    print(f"  delay range  = [{meta['delay_min_ps']}, {meta['delay_max_ps']}] ps")
-    print(f"  retained     = {meta['retained_in_jti']:,} / {meta['accepted_pairs_input']:,}")
+    print(f"  tau_align_ps = {meta['tau_align_ps']:.0f}")
+    if meta.get("peak_mode", "single") != "single":
+        print(f"  peak mode    = {meta['peak_mode']} ({meta['peak_count']} peak directories)")
+    else:
+        print(f"  delay range  = [{meta['delay_min_ps']}, {meta['delay_max_ps']}] ps")
+        print(f"  retained     = {meta['retained_in_jti']:,} / {meta['accepted_pairs_input']:,}")
 
     return 0
 

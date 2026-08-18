@@ -1,6 +1,6 @@
 # CLI 参考
 
-## jti-raw-aligned（主程序）
+## jti-raw-aligned（唯一推荐主程序）
 
 Raw-aligned FPC JTI 提取。只做全局坐标校准，不做 per-tooth ROI 筛选、peak_id 分配、comb line 重排。
 
@@ -30,7 +30,20 @@ Raw-aligned FPC JTI 提取。只做全局坐标校准，不做 per-tooth ROI 筛
 | `--delay-max-ps` | 自动 | 全局 residual delay window 上界（ps） |
 | `--delay-window-ps` | 无 | 快捷方式：`delay_min=-W, delay_max=+W` |
 
-优先级：`--delay-min/max-ps` > `--delay-window-ps` > `±(frame_period//2 - guard_ps)`
+优先级：`--delay-min/max-ps` > `--delay-window-ps` > `±(frame_period - 2*guard_ps)`
+
+默认范围覆盖同一 frame 内 edge guard 后所有可落入 JTI 的对角线偏移。显式指定更窄的 delay range 时，程序会提示它会裁剪大对角偏移。
+
+### 可选参数 — 微腔多峰
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--peak-mode` | `single` | `single`、`auto` 或 `selected`；后两者逐峰输出 |
+| `--peak-indices` | 无 | `selected` 模式下，按 residual delay 升序选择峰，例如 `0,2` |
+| `--peak-window-ps` | 自动按相邻已检测峰留出一个 histogram bin 的间隔 | 每个峰的半窗口（ps）；显式设置时不得使窗口重叠 |
+| `--peak-min-relative-height` | 0.05 | auto 检峰相对于最大残差峰的最小高度 |
+
+`auto` 与 `selected` 生成 `peak_catalog.csv`，并在 `peaks/peak_XXX/` 为每个峰独立保存 JTI、残差直方图和 metadata。默认窗口由相邻峰的间隔确定；不能分开的峰会拒绝提取，而不是写出混合矩阵。默认不会合并峰，也不会进行背景相减。
 
 ### 可选参数 — TimeTagger 通道
 
@@ -87,6 +100,25 @@ jti-raw-aligned \
 # 也可以用 module 方式调用
 python -m jti_extract.cli.raw_aligned --ttbin ... --peaks-csv ... --out ...
 ```
+
+### 多峰示例
+
+```bash
+jti-raw-aligned \
+  --ttbin microcavity.1.ttbin --peaks-csv delay_peaks.csv \
+  --peak-mode selected --peak-indices 0,2 --peak-window-ps 120 \
+  --binwidth-ps 40 --dimensions 80 --out results_multipeak/
+```
+
+## 其他命令
+
+### jti-extract（legacy）
+
+历史 CV/DV/SVD 工作流，只用于复现已有结果。新分析请使用 `jti-raw-aligned`；frame-origin scan 的评分也不能作为自动物理校准结论。
+
+### jti-tdc-residue 与 jti-tdc-layer-scan
+
+独立的离线 TDC residue 诊断。它们报告时间量化结构和 surrogate/分层统计，不能单独确认硬件或光学来源。
 
 ### Metadata 字段
 

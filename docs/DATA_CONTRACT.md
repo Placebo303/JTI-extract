@@ -15,7 +15,8 @@ Swabian TimeTagger 原始时间戳文件。由 TimeTagger 软件生成。
 | `delay_ps` | float | 延时值（ps） |
 | `counts` | float | 该延时处的计数 |
 
-脚本只使用 `counts` 最大的峰的 `delay_ps` 来确定 `tau_align_ps`。
+single 模式只使用 `counts` 最大的峰的 `delay_ps` 来确定 `tau_align_ps`。
+多峰模式仍用这一全局校准；随后在 raw residual-delay histogram 上检测或选择峰，不能把 peaks CSV 中的每行直接解释为独立物理模式。
 其余列（如 `smoothed_counts`, `relative_to_main`, `bin_index`）会被忽略。
 
 此 CSV 可以由 `archived/diagnostics/analyze_interchannel_delay.py` 生成，
@@ -23,4 +24,4 @@ Swabian TimeTagger 原始时间戳文件。由 TimeTagger 软件生成。
 
 ## 输出文件
 
-见 [OUTPUTS.md](OUTPUTS.md)。
+见 [OUTPUTS.md](OUTPUTS.md)。正式方法定义和解释边界见 [METHOD.md](METHOD.md)。

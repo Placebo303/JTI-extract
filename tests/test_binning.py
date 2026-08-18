@@ -11,6 +11,7 @@ from jti_extract.cli.extract import (
     compute_jti_diagnostics,
     diagonal_coincidence_profile,
 )
+from jti_extract.cli.raw_aligned import same_frame_delay_range_ps
 
 
 def test_frame_origin_changes_bins_as_current_algorithm_defines() -> None:
@@ -22,6 +23,12 @@ def test_frame_origin_changes_bins_as_current_algorithm_defines() -> None:
 
     assert bins_t0.tolist() == [0, 1, 2]
     assert bins_t25.tolist() == [-1, 0, 1]
+
+
+def test_raw_aligned_default_delay_range_covers_same_frame_jti() -> None:
+    """Default raw-aligned delay range should cover all guard-kept diagonal offsets."""
+    assert same_frame_delay_range_ps(dim=256, bw=40, guard_bins=4) == (-9920, 9920)
+    assert same_frame_delay_range_ps(dim=128, bw=80, guard_bins=2) == (-9920, 9920)
 
 
 def test_time_tags_to_bins_integer_precision() -> None:
