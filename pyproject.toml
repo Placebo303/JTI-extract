@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jti-extract"
-version = "0.3.1"
+version = "0.4.0"
 description = "Raw-aligned JTI extraction from TimeTagger .ttbin data with automatic delay calibration."
 readme = "README.md"
 requires-python = ">=3.9"

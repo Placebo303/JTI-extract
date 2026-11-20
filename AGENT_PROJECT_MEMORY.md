@@ -55,7 +55,7 @@ python scripts/run_raw_aligned_scan.py
 - `tests/test_io_contract.py` — 保留
 - 其余测试已 archive
 
-## 自动延时（0.3.1，2026-11-20）
+## 自动延时（0.4.0，2026-11-20）
 
 - `jti-raw-aligned` 现在 `--peaks-csv` 可选：只给 `.ttbin` 即可用两路时间标签互相关自动定 `tau_align_ps`。
   优先级：`--tau-align-ps` > (`--tau-auto` 或没给 peaks CSV → 互相关) > peaks CSV 最亮峰。
@@ -78,4 +78,4 @@ python scripts/run_raw_aligned_scan.py
 - `raw_aligned_meta.json` 现在在 SVD 之后写出，`--compute-svd` 时 K/purity/lambda 都进 meta；
   `summary.csv` 增加 `tau_align_ps`、`tau_align_source` 两列。
 - 测试：`python -m pytest -q` → 26 passed，其中 `tests/test_auto_tau.py` 16 个覆盖自动延时。
-- 版本号现在单一来源：`src/jti_extract/_version.py`（0.3.1）。
+- 版本号现在单一来源：`src/jti_extract/_version.py`（0.4.0）。

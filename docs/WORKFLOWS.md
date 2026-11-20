@@ -97,7 +97,7 @@ python scripts/run_raw_aligned_scan.py
   `--delay-min-ps -1500 --delay-max-ps 300`；换数据前先改文件里的常量。
 - 共 12 组：固定 `frame_period ≈ 3200 ps`（bw = 20/25/40/50/80/100）；N 敏感性（bw=40 时
   N=64/80/96/128，bw=50 时 N=48/64/80/96）。每组 `--compute-svd`，最后合并成 `scan_summary.csv`。
-- 想改成自动延时：把脚本 `COMMON_ARGS` 里的 `--tau-align-ps 830` 去掉即可（0.3.1 起不需要 peaks CSV）。
+- 想改成自动延时：把脚本 `COMMON_ARGS` 里的 `--tau-align-ps 830` 去掉即可（0.4.0 起不需要 peaks CSV）。
 
 ## Workflow 6：多角度批量
 
@@ -155,5 +155,5 @@ jti-raw-aligned --ttbin data.1.ttbin \
 ## 兼容性
 
 - **旧流程仍然可用**：给了 `--peaks-csv` 且不给 `--tau-auto` / `--tau-align-ps` 时，仍然取 CSV 最亮峰
-  当 `tau_align_ps`（0.3.1 起由截断改为四舍五入，整数峰无差别）。
+  当 `tau_align_ps`（0.4.0 起由截断改为四舍五入，整数峰无差别）。
 - 旧脚本里写死的 `--peaks-csv` 可以保留，无害；想改成自动估计只需删掉该参数。

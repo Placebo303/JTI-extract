@@ -44,7 +44,7 @@ matplotlib 默认字体对中文支持不佳，热图标题用英文即可；如
 
 ### No events found for channel A=... / B=...
 
-0.3.1 的错误信息会列出该文件里**实际存在的通道号**，例如：
+0.4.0 的错误信息会列出该文件里**实际存在的通道号**，例如：
 
 ```text
 No events found for channel A=2 / B=3 in xxx.1.ttbin.

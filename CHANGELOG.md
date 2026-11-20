@@ -1,6 +1,9 @@
 # Changelog
 
-## [0.3.1] - 2026-11-20
+## [0.4.0] - 2026-11-20
+
+JTI-only release: the toolkit only produces JTI matrices (plus optional SVD/K).
+No multi-peak splitting and no extra diagnostic entry points are included.
 
 ### Added
 - Automatic delay calibration from the `.ttbin` time tags themselves:
@@ -45,6 +48,24 @@
   "Cannot determine tau_align_ps".
 - `archived/diagnostics/analyze_interchannel_delay.py` computes its repo root
   correctly (`parents[2]`) so it can run standalone from this checkout.
+
+### Removed
+- `examples/minimal_example.py`, `examples/parameter_scan.py`,
+  `examples/plot_jti.py`, `examples/generate_simulated_data.py` and
+  `examples/data/README.md` (came from upstream main). They import internal
+  helpers that no longer exist and therefore cannot run; this release keeps the
+  surface focused on JTI extraction. Simulated-data coverage stays in `tests/`.
+
+### Documentation
+- `README.md`, `docs/CLI.md`, `docs/DATA_CONTRACT.md`, `docs/WORKFLOWS.md`,
+  `docs/OUTPUTS.md`, `docs/TROUBLESHOOTING.md`, `docs/TOKEN_SUMMARY.md`
+  rewritten for the ttbin-only workflow (automatic delay, optional peaks CSV,
+  `_tag_cache`, channel selection, environment pitfalls).
+- `docs/METHOD.md` rewritten to match the implementation: automatic delay from
+  the A/B correlation, `K` from the SVD of `sqrt(H / sum(H))`, only `.ttbin`
+  input; the legacy TDC-residue section is gone.
+- `archived/diagnostics/README.md` corrected (real parameter and output names of
+  `analyze_interchannel_delay.py`).
 
 ## [0.3.0] - 2026-06-08
 

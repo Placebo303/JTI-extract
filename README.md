@@ -4,7 +4,7 @@
 只做全局坐标校准：全局 B 通道延时补偿 + 全局 residual-delay window 配对 + 非循环、edge-guarded 分箱，
 输出绝对计数矩阵。不做 per-tooth ROI 筛选、不分配 peak_id、不做 comb line 重排、不做背景扣除。
 
-当前版本：**0.3.1**（新增：`--peaks-csv` 变为可选；只给 `.ttbin` 即可用两路时间标签互相关自动确定延时）。
+当前版本：**0.4.0**（新增：`--peaks-csv` 变为可选；只给 `.ttbin` 即可用两路时间标签互相关自动确定延时）。
 
 ---
 
@@ -274,6 +274,7 @@ jti_extract/__init__.py                仓库根目录 dev shim（未安装也�
 ## 11. 文档
 
 - [CLI 参考](docs/CLI.md)
+- [方法](docs/METHOD.md)
 - [工作流](docs/WORKFLOWS.md)
 - [输出格式](docs/OUTPUTS.md)
 - [数据格式](docs/DATA_CONTRACT.md)
@@ -285,6 +286,8 @@ jti_extract/__init__.py                仓库根目录 dev shim（未安装也�
 
 ## 12. 版本
 
-- `0.3.1` — `--peaks-csv` 改为可选；新增基于 `.ttbin` 时间标签互相关的自动延时
+- `0.4.0` — `--peaks-csv` 改为可选；新增基于 `.ttbin` 时间标签互相关的自动延时
   （粗测 + 细分箱质心精修、显著性/边缘诊断）；新增 `--auto-delay-range`；
-  修正 peaks CSV 最亮峰恰为 0 ps 时的误报；改进通道选择错误提示。详见 [CHANGELOG.md](CHANGELOG.md)。
+  修正 peaks CSV 最亮峰恰为 0 ps 时的误报；改进通道选择错误提示。本版本为 **JTI-only** 发布：
+  不含多峰拆分与额外诊断入口；上游 main 里那 4 个无法运行的 `examples/*.py` 已移除。
+  详见 [CHANGELOG.md](CHANGELOG.md)。

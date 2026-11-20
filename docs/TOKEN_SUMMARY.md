@@ -2,7 +2,7 @@
 
 ## 项目
 
-JTI-extract：从 TimeTagger `.ttbin` 原始时间标签提取 raw-aligned JTI 矩阵（0.3.1）。
+JTI-extract：从 TimeTagger `.ttbin` 原始时间标签提取 raw-aligned JTI 矩阵（0.4.0）。
 
 ## 唯一活跃脚本
 

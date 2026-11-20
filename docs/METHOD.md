@@ -1,132 +1,117 @@
-# Method: JTI Extraction from Time-Tag Data
+# 方法（Method）
 
-## 1. Introduction
+本文档给出 `jti-raw-aligned` 的坐标定义、延时校准、矩阵累加与 Schmidt-like K 公式。
+本仓库只负责 **JTI 产出**：不做多峰拆分、不做 per-tooth ROI、不分配 peak_id、不做背景扣除。
 
-Joint Time-Intensity (JTI) extraction is a technique for characterizing temporal correlations in quantum optics experiments. This document describes the mathematical formulation and algorithms implemented in the `jti-extract` toolkit.
+## 1. 记号
 
-## 2. Mathematical Formulation
+| 记号 | 含义 |
+|---|---|
+| `t_A`, `t_B` | A / B 两个逻辑通道的原始时间标签（整数 ps，来自 `.ttbin`） |
+| `N`（`dimensions`） | JTI 维度 |
+| `w`（`binwidth_ps`） | bin 宽度（ps） |
+| `T = N w` | frame period（ps） |
+| `t_0`（`frame_origin_ps`） | 帧原点（ps） |
+| `g`（`guard_bins`） | 帧边缘保护 bin 数，`guard_ps = g w` |
+| `τ_align`（`tau_align_ps`） | 全局 B 通道延时补偿（整数 ps） |
 
-### 2.1 JTI Matrix Definition
+## 2. 全局延时校准 `τ_align`
 
-The JTI matrix $H(t_A, t_B)$ represents the joint probability distribution of photon detection times at two detectors A and B:
+`t_B_corr = t_B − τ_align`。`τ_align` 的来源按优先级取第一个可用的：
 
-$$H(t_A, t_B) = \sum_{i} \delta(t - t_A^{(i)}) \delta(t - t_B^{(i)})$$
+1. `--tau-align-ps`（显式给出）；
+2. `.ttbin` 时间标签互相关（`--tau-auto`，或没有给 `--peaks-csv`）；
+3. `--peaks-csv` 中 `counts` 最大那一行的 `delay_ps`。
 
-where $t_A^{(i)}$ and $t_B^{(i)}$ are the detection times of the $i$-th coincidence event.
+### 2.1 互相关自动估计
 
-In discrete form with bin width $\Delta t$:
+对满足 `|t_B − t_A| ≤ W`（`W = --tau-search-window-ps`，默认 25 ns）的所有有序 A-B 配对，
+统计 `Δτ = t_B − t_A` 的直方图：
 
-$$H[m, n] = \#\{(t_A, t_B) : m\Delta t \leq t_A < (m+1)\Delta t, \ n\Delta t \leq t_B < (n+1)\Delta t\}$$
+$$C(\Delta\tau) = \#\{(t_A, t_B) : \Delta\tau - w_0/2 \le t_B - t_A < \Delta\tau + w_0/2\}$$
 
-### 2.2 Raw-Aligned Coordinate Calibration
+其中 `w_0 = --tau-coarse-bin-ps`（默认 20 ps）。这就是两路时间标签流的（加窗）互相关，
+不需要任何外部峰表。然后：
 
-The raw-aligned algorithm performs coordinate calibration without mode selection or structural rearrangement:
+1. **粗测**：对 `C` 做宽度 `s = --tau-smooth-ps`（默认 300 ps，约一个 FP 腔 FSR / 梳齿簇尺度）
+   的 boxcar 平滑，取内区（去掉一个平滑核宽度）的最大值。boxcar 会把窄峰抹成平顶，
+   故取平顶中心作为峰位；若只有一个 bin 达极大值，再用抛物线插值到亚 bin。
+2. **精修**（默认开，`--no-tau-refine` 可关）：以粗测峰为中心 ±`--tau-refine-window-ps`（默认 300 ps）
+   内改用 `--tau-refine-bin-ps`（默认 2 ps）细分箱，取环带（窗口外 300 ps 内）背景中位数，
+   扣除背景后计算该簇的质心，得到 `τ_exact`（可带小数）。
+3. **应用**：`τ_align = round(τ_exact)`。
 
-1. **Peak Detection**: Identify the brightest peak in the residual delay histogram from `pminus_peaks.csv`
-2. **Alignment Offset**: Calculate alignment offset $\tau_{\text{align}}$ from the peak position
-3. **Global B-Channel Correction**: Apply correction to all B-channel timestamps:
-   $$t_B^{\text{corr}} = t_B - \tau_{\text{align}}$$
-4. **Residual Delay Filtering**: Select events within the specified delay window:
-   $$\text{delay\_min} \leq (t_B^{\text{corr}} - t_A) \leq \text{delay\_max}$$
-5. **Frame Binning**: Apply frame coordinates + edge guard + binning to produce $H_{\text{raw\_aligned}}$
+可靠性判定（都写进 `raw_aligned_meta.json` 的 `tau_auto`）：
 
-### 2.3 SVD/K Schmidt Number Computation
+- 显著性 $S = (h_{peak} - b)\,k / \sqrt{b\,k}$，其中 `h` 为平滑峰高、`b` 为平滑背景中位数、
+  `k` 为平滑 bin 数；`S < 5` 时告警，精修 `S < 5` 时退回粗测值（`refine_used = false`）。
+- 平滑峰距搜索窗边界不足一个平滑核时 `at_search_edge = true` 并告警。
+- 高度 ≥ 最大值 98% 的其它平滑峰作为候选簇列入 `near_equal_candidates`（梳齿 / 多模数据的
+  “延时应取哪一簇”是模式选择，不是唯一解）。
+- 搜索窗内配对数 < 5000（`TAU_AUTO_MIN_TRUSTED_PAIRS`）时告警：小样本容易锁到背景涨落。
 
-The Schmidt number $K$ quantifies the effective dimensionality of the JTI matrix:
+## 3. Residual delay 窗口
 
-1. **Singular Value Decomposition**: Compute SVD of the JTI matrix:
-   $$H = U \Sigma V^T$$
-   where $\Sigma = \text{diag}(\sigma_1, \sigma_2, \ldots, \sigma_n)$
+只保留满足下式的有序 A-B 配对（不去重、不分配配对编号）：
 
-2. **Normalized Singular Values**: 
-   $$\tilde{\sigma}_i = \frac{\sigma_i}{\sum_j \sigma_j}$$
+$$\text{delay\_min} \le t_B^{\text{corr}} - t_A \le \text{delay\_max}$$
 
-3. **Schmidt Number**:
-   $$K = \frac{1}{\sum_i \tilde{\sigma}_i^2}$$
+窗口来源：`--delay-min-ps`/`--delay-max-ps` > `--delay-window-ps`（半宽）> 默认半宽
+`T/2 - guard_ps`。`--auto-delay-range` 时窗口中心取实测残余峰而不是 0 ps
+（实测峰不可信时保持 0 ps 并告警）。
 
-4. **Purity**:
-   $$P = \sum_i \tilde{\sigma}_i^2 = \frac{1}{K}$$
+## 4. 帧坐标与 edge guard
 
-The Schmidt number $K$ ranges from 1 (product state) to $n$ (maximally entangled state).
+对 `t ∈ {t_A, t_B_corr}`：
 
-## 3. TDC 40ps Residue Diagnostics
+$$u = t - t_0,\qquad f = \lfloor u / T \rfloor,\qquad x = u - f T$$
 
-### 3.1 Residue Detection
+- 只保留 **同一帧** 的配对：`f_A = f_B`；
+- 帧内位置必须满足 `guard_ps ≤ x < T - guard_ps`；
+- 其余配对分别计入 `cross_frame_rejected`、`edge_rejected`。
 
-The Time-to-Digital Converter (TDC) exhibits a periodic residue pattern with period 40ps. This is a hardware limitation that manifests as:
+## 5. 矩阵累加
 
-- Peaks in the residual delay histogram at multiples of 40ps
-- Artifacts in the JTI matrix diagonal structure
-- Periodic modulation in the arrival-time distribution
+对通过筛选的每个配对：
 
-### 3.2 Layer-by-Layer Analysis
+$$i = \lfloor x_A / w \rfloor,\qquad j = \lfloor x_B / w \rfloor,\qquad H[i, j] \mathrel{+}= 1$$
 
-The diagnostics tool performs layer-by-layer analysis:
+`H` 是**绝对计数**矩阵（`normalization = none`，不做背景扣除）。计数守恒必须满足
 
-1. **Singles Distribution**: Analyze individual channel arrival times
-2. **Pair dt Distribution**: Analyze time differences between paired detections
-3. **Residue Quantification**: Measure residue amplitude and periodicity
-4. **Layer Scan**: Scan through TDC layers to identify optimal operating point
+$$\text{accepted} = \text{retained} + \text{cross\_frame} + \text{edge} + \text{invalid},\qquad
+\text{count\_balance\_error} = 0$$
 
-## 4. Implementation Details
+## 6. Schmidt-like K（`--compute-svd`）
 
-### 4.1 Data Loading
+代码实现（`_compute_svd_k`）：
 
-The toolkit supports three input formats:
+$$P = H / \sum_{ij} H_{ij},\qquad A = \sqrt{P},\qquad A = U \Sigma V^T$$
 
-| Format | Loader | Description |
-|--------|--------|-------------|
-| `.ttbin` | `TimeTagger` API | Swabian binary format |
-| `.npz` | `numpy.load` | NumPy compressed arrays |
-| `.csv` | `pandas.read_csv` | Time-tag CSV |
+取 `s_i = Σ_ii > 1e-12`，权重与 K：
 
-### 4.2 Binning Algorithm
+$$\lambda_i = \frac{s_i^2}{\sum_j s_j^2},\qquad \text{purity} = \sum_i \lambda_i^2,\qquad K = \frac{1}{\text{purity}}$$
 
-The binning algorithm converts continuous timestamps to discrete bins:
+`summary.csv` 与 meta 里另外给出 `n_singular_values`、`singular_values`、`lambda_weights`、
+`lambda1/2/3`、`lambda5_cumsum`、`lambda10_cumsum`。
 
-```python
-def bin_timestamps(timestamps_ps, binwidth_ps, dimensions, frame_origin_ps=0):
-    """Convert timestamps to bin indices."""
-    # Relative to frame origin
-    t_rel = timestamps_ps - frame_origin_ps
-    
-    # Bin index
-    bin_idx = np.floor(t_rel / binwidth_ps).astype(int)
-    
-    # Filter valid bins
-    valid = (bin_idx >= 0) & (bin_idx < dimensions)
-    
-    return bin_idx[valid]
-```
+注意：`K` 依赖 `w` 与 `N`，不同 frame period 之间的 K 不可直接比较；
+`w` 低于探测器 jitter 时属于过采样。
 
-### 4.3 Visualization
+## 7. 实现与输入
 
-The plotting module provides publication-quality visualizations:
+- **输入只支持 `.ttbin`**：通过 Swabian `TimeTagger.FileReader` 读取，只取 `event type = 0`，
+  按通道号拆成 A / B 两路并排序；缓存到 `<out>/_tag_cache/tags_cache_ch{A}_ch{B}.npz`。
+- 配对与分箱是**分块流式**的：每个 A 块用 `searchsorted` 找候选 B，再直接累加 `H` 与 residual 直方图，
+  不展开保存全量配对，内存有界。
+- 输出：`H_raw_aligned.csv/npz/png`、`residual_tau_histogram.csv/png`、`raw_aligned_meta.json`，
+  `--compute-svd` 时另有 `summary.csv`。
 
-- **Heatmap**: 2D JTI matrix visualization with configurable colormap
-- **SVD Spectrum**: Singular value distribution on log scale
-- **Residual Histogram**: Time difference distribution with residue markers
+## 8. 验证
 
-## 5. Validation
-
-### 5.1 Simulated Data Tests
-
-The test suite includes simulated data with known properties:
-
-- **Product State**: $K = 1$ (no correlations)
-- **Maximally Entangled State**: $K = n$ (perfect correlations)
-- **Noisy State**: $K < n$ with controllable noise level
-
-### 5.2 Real Data Comparison
-
-Validation against real experimental data:
-
-- **SPDC Source**: Type-II spontaneous parametric down-conversion
-- **TimeTagger**: Swabian TimeTagger Ultra with 40ps resolution
-- **Expected Schmidt Number**: $K \approx 2$ for polarization-entangled pairs
-
-## References
-
-1. Horodecki, R., Horodecki, P., Horodecki, M., & Horodecki, K. (2009). Quantum entanglement. *Reviews of Modern Physics*, 81(2), 865.
-2. Sackett, C. A., et al. (2000). Experimental entanglement of four particles. *Nature*, 404(6775), 256-259.
-3. Pan, J. W., et al. (2012). Multiphoton entanglement and interferometry. *Reviews of Modern Physics*, 84(2), 777.
+- 单元测试：`python -m pytest -q` → 26 passed，其中 16 个覆盖自动延时
+  （已知延时的合成时间标签、峰值定位、优先级、候选簇、低统计量降级）。
+- 真实数据（FP #1 set1，`ii-DF776.348-1_2026-08-07_161354.1.ttbin`，ch1/ch3，
+  全量 3,540,005 A / 2,959,183 B 事件）：自动估计 `τ_align ≈ −119 ps`
+  （粗测 −126.2 ps / 28.2σ；精修 −118.9 ps / 39.8σ），`count_balance_error = 0`。
+  历史“peaks CSV + 300 ps 平滑峰”流程给 −130 ps，两者差约 10 ps（< 一个 40 ps bin）；
+  需要复现历史值时显式 `--tau-align-ps -130`。
