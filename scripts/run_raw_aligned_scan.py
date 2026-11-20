@@ -16,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 TTBIN = r"D:\Data\Raw Data\2026.04.13BFC\Time Tags\Type II FPC 90° Single Filter_2026-04-13_165855.1.ttbin"
-PEAKS_CSV = r"D:\Code\JTI提取\results\fpc_multiline_analysis\90deg\pminus_peaks.csv"
 OUT_BASE = r"D:\Data\Raw Data\2026.04.13BFC\Time Tags\raw_aligned_scan_90deg"
 
 COMMON_ARGS = [
@@ -50,10 +49,11 @@ SCANS = [
 
 def run_scan(label: str, bw: int, dim: int, gb: int) -> dict | None:
     out_dir = Path(OUT_BASE) / label
+    # tau_align_ps is calibrated from the .ttbin time tags themselves
+    # (no external peaks CSV needed); pass --tau-align-ps here to pin it.
     cmd = [
         sys.executable, "-m", "jti_extract.cli.raw_aligned",
         "--ttbin", TTBIN,
-        "--peaks-csv", PEAKS_CSV,
         "--binwidth-ps", str(bw),
         "--dimensions", str(dim),
         "--guard-bins", str(gb),

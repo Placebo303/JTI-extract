@@ -9,6 +9,6 @@ if _SRC_PACKAGE.exists():
     __path__.insert(0, str(_SRC_PACKAGE))  # type: ignore[name-defined]
 
 try:
-    from . import __version__ as __version__  # type: ignore[attr-defined]
-except Exception:
+    from ._version import __version__  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - only when the src tree is missing
     __version__ = "0.1.0"

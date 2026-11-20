@@ -3,7 +3,9 @@
 
 Preserves the full joint arrival-time structure observed in TimeTagger
 raw timestamps.  Only one calibration is applied: a global B-channel
-delay correction derived from the brightest peak in pminus_peaks.csv.
+delay correction tau_align_ps.  It is resolved in priority order from
+--tau-align-ps, the brightest peak of --peaks-csv, or the A/B time-tag
+cross-correlation measured directly on the .ttbin acquisition.
 
   t_B_corr = t_B - tau_align_ps
 
@@ -23,7 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
+import math
 import warnings
 from pathlib import Path
 from typing import Any
@@ -99,15 +101,431 @@ def infer_tau_align_brightest(
 
     peaks = load_peaks(peaks_csv)
     if peaks:
-        max_peak = max(peaks, key=lambda p: float(p.get("counts", 0)))
-        delay = float(max_peak.get("delay_ps", 0))
-        if delay != 0:
-            return delay, "brightest_peak"
+        def _peak_count(peak: dict[str, Any]) -> float:
+            try:
+                return float(peak.get("counts") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        max_peak = max(peaks, key=_peak_count)
+        if _peak_count(max_peak) > 0.0:
+            return float(max_peak.get("delay_ps") or 0.0), "brightest_peak"
 
     raise SystemExit(
         "Cannot determine tau_align_ps: provide --tau-align-ps or a peaks_csv "
         "with at least one peak having counts > 0"
     )
+
+
+# ---------------------------------------------------------------------------
+# Automatic delay calibration from the time-tag correlation
+# ---------------------------------------------------------------------------
+#
+# The A/B coincidence histogram P(tau) = (t_B - t_A) inside a search window is
+# exactly the windowed cross-correlation of the two raw time-tag streams, so
+# tau_align_ps can be calibrated from the acquisition itself, without an
+# external peak table.  Two passes are used:
+#   1. coarse: +/- tau_search_window_ps, ~20 ps bins, boxcar smoothing, to find
+#      the brightest coincidence cluster robustly against the accidental
+#      background;
+#   2. fine: +/- refine window around that cluster, ~2 ps bins, with parabolic
+#      interpolation for a sub-bin peak position.
+# The result is applied as the global B-channel correction
+#   t_B_corr = t_B - tau_align_ps
+
+DEFAULT_TAU_SEARCH_WINDOW_PS = 25_000
+DEFAULT_TAU_COARSE_BIN_PS = 20
+DEFAULT_TAU_SMOOTH_PS = 300
+DEFAULT_TAU_REFINE_WINDOW_PS = 300
+DEFAULT_TAU_REFINE_BIN_PS = 2
+DEFAULT_TAU_REFINE_MARGIN_PS = 300
+# Below this many A-B pairs inside the correlation window the automatic delay can
+# lock onto a background fluctuation, so the result is reported as untrusted.
+TAU_AUTO_MIN_TRUSTED_PAIRS = 5_000
+
+
+def _block_delta_blocks(
+    a_block: np.ndarray,
+    t_b: np.ndarray,
+    window_ps: np.int64,
+    search_center_ps: np.int64,
+    max_pairs_per_block: int,
+):
+    """Yield (t_B - t_A) arrays for one A block, splitting when a block is huge."""
+    lo_bound = a_block + search_center_ps - window_ps
+    hi_bound = a_block + search_center_ps + window_ps
+    left = np.searchsorted(t_b, lo_bound, side="left")
+    right = np.searchsorted(t_b, hi_bound, side="right")
+    n = right - left
+    total = int(n.sum())
+    if total <= 0:
+        return
+    if total > int(max_pairs_per_block) and a_block.size > 1:
+        half = int(a_block.size // 2)
+        yield from _block_delta_blocks(a_block[:half], t_b, window_ps, search_center_ps, max_pairs_per_block)
+        yield from _block_delta_blocks(a_block[half:], t_b, window_ps, search_center_ps, max_pairs_per_block)
+        return
+    starts = np.repeat(left, n)
+    offsets = np.arange(total, dtype=np.int64) - np.repeat(np.cumsum(n) - n, n)
+    deltas = t_b[starts + offsets] - np.repeat(a_block, n)
+    yield deltas
+
+
+def iter_delta_blocks(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    half_window_ps: int,
+    center_ps: float = 0.0,
+    block_events: int = 200_000,
+    max_pairs_per_block: int = 4_000_000,
+):
+    """Yield deltas for all A-B pairs with |(t_B - t_A) - center| <= half window."""
+    t_a = np.asarray(t_a, dtype=np.int64)
+    t_b = np.asarray(t_b, dtype=np.int64)
+    window = np.int64(int(half_window_ps))
+    center = np.int64(int(round(float(center_ps))))
+    for start in range(0, int(t_a.size), int(block_events)):
+        block = t_a[start:start + int(block_events)]
+        yield from _block_delta_blocks(block, t_b, window, center, int(max_pairs_per_block))
+
+
+def delta_histogram(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    half_window_ps: int,
+    bin_ps: int,
+    center_ps: float = 0.0,
+    block_events: int = 200_000,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Histogram of t_B - t_A over [center - half, center + half].
+
+    This is the sparse (pair-wise) form of the A/B cross-correlation: it stays
+    exact for multi-second acquisitions instead of resampling the whole
+    timestamp span into fine bins.
+    """
+    half = int(half_window_ps)
+    width = int(bin_ps)
+    if half <= 0:
+        raise ValueError(f"half_window_ps must be positive, got {half_window_ps}")
+    if width <= 0:
+        raise ValueError(f"bin_ps must be positive, got {bin_ps}")
+
+    n_bins = (2 * half) // width + 1
+    low_edge = float(center_ps) - float(half)
+    counts = np.zeros(n_bins, dtype=np.int64)
+    for deltas in iter_delta_blocks(
+        t_a, t_b, half_window_ps=half, center_ps=center_ps, block_events=block_events
+    ):
+        idx = np.floor((deltas.astype(np.float64) - low_edge) / float(width)).astype(np.int64)
+        valid = (idx >= 0) & (idx < n_bins)
+        if np.any(valid):
+            counts += np.bincount(idx[valid], minlength=n_bins)
+    centers = low_edge + (np.arange(n_bins, dtype=np.float64) + 0.5) * float(width)
+    return centers, counts
+
+
+def _boxcar_smooth(counts: np.ndarray, bins: int) -> np.ndarray:
+    k = max(1, int(bins))
+    if k == 1:
+        return np.asarray(counts, dtype=np.float64)
+    kernel = np.ones(k, dtype=np.float64) / float(k)
+    return np.convolve(np.asarray(counts, dtype=np.float64), kernel, mode="same")
+
+
+def _parabolic_peak_offset(y_left: float, y_mid: float, y_right: float) -> float:
+    denom = float(y_left) - 2.0 * float(y_mid) + float(y_right)
+    if denom == 0.0:
+        return 0.0
+    return float(np.clip(0.5 * (float(y_left) - float(y_right)) / denom, -0.5, 0.5))
+
+
+def locate_histogram_peak(
+    centers: np.ndarray,
+    counts: np.ndarray,
+    *,
+    smooth_bins: int,
+) -> dict[str, Any] | None:
+    """Locate the brightest boxcar-smoothed peak with sub-bin interpolation."""
+    if centers.size != counts.size or centers.size < 3:
+        return None
+    step = float(centers[1] - centers[0])
+    k = max(1, int(smooth_bins))
+    smoothed = _boxcar_smooth(counts, k)
+    # Exclude a smoothing-kernel margin: np.convolve zero-pads, so the extreme
+    # edges are artificially suppressed and must not be reported as peaks.
+    margin = min(k, max(0, smoothed.size // 2 - 2))
+    start = margin
+    stop = smoothed.size - margin
+    inner = smoothed[start:stop]
+    if inner.size == 0 or not np.all(np.isfinite(inner)):
+        return None
+    local = int(np.argmax(inner))
+    idx = local + start
+
+    background = float(np.median(inner))
+    height = float(smoothed[idx])
+    excess = (height - background) * float(k)
+    sigma = math.sqrt(max(background, 1e-12) * float(k))
+
+    # Boxcar smoothing turns any peak narrower than the kernel into a flat-topped
+    # plateau with an arbitrary argmax bin.  The plateau centre is the unbiased
+    # peak position; a single-bin maximum keeps the parabolic sub-bin estimate.
+    def _plateau_bounds(pos: int, value: float) -> tuple[int, int]:
+        tol = max(1e-6 * value, 0.0)
+        lo = pos
+        while lo > start and abs(smoothed[lo - 1] - value) <= tol:
+            lo -= 1
+        hi = pos
+        while hi + 1 < stop and abs(smoothed[hi + 1] - value) <= tol:
+            hi += 1
+        return lo, hi
+
+    def _peak_position(pos: int) -> float:
+        lo, hi = _plateau_bounds(pos, float(smoothed[pos]))
+        if hi > lo:
+            return float(np.mean(centers[lo:hi + 1]))
+        left = smoothed[pos - 1] if pos > 0 else smoothed[pos]
+        right = smoothed[pos + 1] if pos + 1 < smoothed.size else smoothed[pos]
+        return float(centers[pos]) + _parabolic_peak_offset(left, smoothed[pos], right) * step
+
+    peak_ps = _peak_position(idx)
+
+    # Near-equal clusters (comb structure / multi-mode data) make the "brightest"
+    # peak a mode selection rather than a unique delay, so report the candidates.
+    near_equal_floor = 0.98 * height
+    candidates: list[dict[str, Any]] = []
+    last_pos = -10 ** 9
+    for pos in range(start + 1, stop - 1):
+        value = float(smoothed[pos])
+        if value < near_equal_floor:
+            continue
+        if value < smoothed[pos - 1] or value < smoothed[pos + 1]:
+            continue
+        if pos - last_pos <= k:
+            continue
+        # Report each cluster by its local background-subtracted centroid in raw
+        # counts (one kernel width), which is far more stable than the plateau bin.
+        lo = max(0, pos - k)
+        hi = min(counts.size, pos + k + 1)
+        weights_c = np.clip(np.asarray(counts[lo:hi], dtype=np.float64) - background, 0.0, None)
+        if float(weights_c.sum()) > 0.0:
+            candidate_ps = float(
+                (np.asarray(centers[lo:hi], dtype=np.float64) * weights_c).sum()
+                / float(weights_c.sum())
+            )
+        else:
+            candidate_ps = _peak_position(pos)
+        candidates.append(
+            {
+                "peak_ps": candidate_ps,
+                "smoothed_counts": value,
+            }
+        )
+        last_pos = pos
+        if len(candidates) >= 10:
+            break
+
+    return {
+        "peak_ps": peak_ps,
+        "peak_bin": idx,
+        "peak_smoothed_counts": height,
+        "background_smoothed_counts": background,
+        "significance": float(excess / sigma) if sigma > 0.0 else 0.0,
+        "at_search_edge": bool(idx < k + 1 or idx > smoothed.size - k - 2),
+        "smooth_bins": k,
+        "bin_ps": step,
+        "near_equal_candidates": candidates,
+        "n_near_equal": len(candidates),
+    }
+
+
+def refine_tau_by_local_centroid(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    coarse_peak_ps: float,
+    *,
+    half_window_ps: int = DEFAULT_TAU_REFINE_WINDOW_PS,
+    bin_ps: int = DEFAULT_TAU_REFINE_BIN_PS,
+    background_margin_ps: int = DEFAULT_TAU_REFINE_MARGIN_PS,
+    block_events: int = 200_000,
+) -> dict[str, Any] | None:
+    """Re-centre the coarse peak on the centroid of its coincidence cluster.
+
+    The fine histogram keeps 2 ps bins, but instead of taking another argmax
+    (which can hop between near-equal comb teeth inside one broad cluster) the
+    cluster centre is taken as the background-subtracted centre of mass inside
+    +/- half_window_ps.  The background is estimated from the ring outside that
+    window, so no external flat-background assumption is needed.
+    """
+    half = max(int(bin_ps), int(half_window_ps))
+    margin = max(int(bin_ps), int(background_margin_ps))
+    bin_width = max(1, int(bin_ps))
+    centers, counts = delta_histogram(
+        t_a,
+        t_b,
+        half_window_ps=half + margin,
+        bin_ps=bin_width,
+        center_ps=coarse_peak_ps,
+        block_events=block_events,
+    )
+    offset = centers - float(coarse_peak_ps)
+    inside = np.abs(offset) <= float(half)
+    ring = (~inside) & (np.abs(offset) <= float(half + margin))
+    if not np.any(inside) or not np.any(ring):
+        return None
+    background = float(np.median(counts[ring]))
+    if background <= 0.0:
+        # Sparse acquisitions can have a zero median; the mean is the Poisson MLE.
+        background = float(np.mean(counts[ring]))
+    inside_bins = int(np.count_nonzero(inside))
+    weights = np.clip(counts[inside].astype(np.float64) - background, 0.0, None)
+    total_weight = float(weights.sum())
+    if total_weight <= 0.0:
+        return None
+    centroid = float((centers[inside] * weights).sum() / total_weight)
+    background_total = background * float(inside_bins)
+    sigma = math.sqrt(max(background_total, 1.0))
+    return {
+        "method": "local_centroid",
+        "peak_ps": centroid,
+        "half_window_ps": half,
+        "background_margin_ps": margin,
+        "bin_ps": bin_width,
+        "n_pairs": int(counts[inside].sum()),
+        "background_per_bin": background,
+        "excess_counts": total_weight,
+        "significance": float(total_weight / sigma),
+    }
+
+
+def estimate_tau_align_from_tags(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    *,
+    search_window_ps: int = DEFAULT_TAU_SEARCH_WINDOW_PS,
+    coarse_bin_ps: int = DEFAULT_TAU_COARSE_BIN_PS,
+    smooth_ps: int = DEFAULT_TAU_SMOOTH_PS,
+    refine: bool = True,
+    refine_window_ps: int = DEFAULT_TAU_REFINE_WINDOW_PS,
+    refine_bin_ps: int = DEFAULT_TAU_REFINE_BIN_PS,
+    block_events: int = 200_000,
+) -> dict[str, Any]:
+    """Calibrate the global delay directly from the A/B time-tag correlation.
+
+    The returned dict carries tau_align_ps (integer ps to apply) and
+    tau_align_ps_exact (interpolated estimate) plus per-pass diagnostics.
+    """
+    t_a = np.asarray(t_a, dtype=np.int64)
+    t_b = np.asarray(t_b, dtype=np.int64)
+    if t_a.size == 0 or t_b.size == 0:
+        raise RuntimeError(
+            "cannot calibrate the delay from correlation: one of the selected channels has no events"
+        )
+
+    search_window = int(search_window_ps)
+    coarse_bin = max(1, int(coarse_bin_ps))
+    centers, counts = delta_histogram(
+        t_a, t_b, half_window_ps=search_window, bin_ps=coarse_bin, block_events=block_events
+    )
+    n_pairs = int(counts.sum())
+    if n_pairs <= 0:
+        raise RuntimeError(
+            f"cannot calibrate the delay from correlation: no A-B pairs within "
+            f"+/-{search_window} ps. Check --raw-ch-a-id/--raw-ch-b-id and --tau-search-window-ps."
+        )
+    smooth_bins = max(1, int(round(float(smooth_ps) / float(coarse_bin))))
+    coarse_peak = locate_histogram_peak(centers, counts, smooth_bins=smooth_bins)
+    if coarse_peak is None:
+        raise RuntimeError("cannot calibrate the delay from correlation: empty correlation histogram")
+
+    info: dict[str, Any] = {
+        "method": "auto_correlation",
+        "search_window_ps": search_window,
+        "coarse_bin_ps": coarse_bin,
+        "smooth_ps": int(smooth_ps),
+        "n_pairs": n_pairs,
+        "coarse": coarse_peak,
+    }
+
+    tau_exact = float(coarse_peak["peak_ps"])
+    if refine:
+        refined = refine_tau_by_local_centroid(
+            t_a,
+            t_b,
+            tau_exact,
+            half_window_ps=refine_window_ps,
+            bin_ps=refine_bin_ps,
+            block_events=block_events,
+        )
+        if refined is not None:
+            info["refine"] = refined
+            # Only trust the refined centre when the cluster excess is significant.
+            if refined["significance"] >= 5.0:
+                tau_exact = float(refined["peak_ps"])
+            else:
+                info["refine_used"] = False
+
+    info["tau_align_ps_exact"] = tau_exact
+    info["tau_align_ps"] = int(round(tau_exact))
+    return info
+
+
+def resolve_tau_align_ps(
+    *,
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    explicit_tau_align_ps: float | None,
+    peaks_csv: Path | None,
+    force_auto: bool,
+    auto_kwargs: dict[str, Any],
+) -> tuple[float, str, dict[str, Any] | None]:
+    """Resolve tau_align_ps: explicit > ttbin correlation > peaks-CSV brightest peak."""
+    if explicit_tau_align_ps is not None:
+        return float(explicit_tau_align_ps), "explicit", None
+    if force_auto or peaks_csv is None:
+        info = estimate_tau_align_from_tags(t_a, t_b, **auto_kwargs)
+        return float(info["tau_align_ps"]), "auto_correlation", info
+    if not peaks_csv.exists():
+        raise SystemExit(
+            f"peaks CSV not found: {peaks_csv}. Drop --peaks-csv to calibrate the "
+            f"delay from the .ttbin time-tag correlation instead."
+        )
+    tau, source = infer_tau_align_brightest(peaks_csv, None)
+    return float(tau), source, None
+
+
+def _measure_residual_peak_ps(
+    t_a: np.ndarray,
+    t_b: np.ndarray,
+    tau_align_ps: float,
+    *,
+    tau_auto: dict[str, Any] | None,
+    auto_kwargs: dict[str, Any],
+) -> float:
+    """Residual delay peak (ps) after applying tau_align_ps, plus a trust verdict.
+
+    The verdict guards --auto-delay-range: without enough A-B pairs (or without a
+    >=5 sigma correlation peak) the measured residual peak is a background
+    fluctuation and the window must stay centred on 0 ps.
+    """
+    if tau_auto is not None:
+        residual = float(tau_auto["tau_align_ps_exact"]) - float(tau_align_ps)
+        n_pairs = int(tau_auto["n_pairs"])
+        return residual, n_pairs >= TAU_AUTO_MIN_TRUSTED_PAIRS, {
+            "n_pairs": n_pairs,
+            "significance": None,
+        }
+    probe = estimate_tau_align_from_tags(t_a, t_b, **auto_kwargs)
+    n_pairs = int(probe["n_pairs"])
+    refined = probe.get("refine")
+    refine_used = refined is not None and bool(probe.get("refine_used", True))
+    peak_info = refined if refine_used else probe["coarse"]
+    significance = float(peak_info["significance"])
+    residual = float(peak_info["peak_ps"]) - float(tau_align_ps)
+    trusted = n_pairs >= TAU_AUTO_MIN_TRUSTED_PAIRS and significance >= 5.0
+    return residual, trusted, {"n_pairs": n_pairs, "significance": significance}
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +555,7 @@ def build_raw_aligned_jti(
     Returns (H, meta) where meta contains all pair-count diagnostics
     and the residual-tau histogram (bins, counts).
     """
-    tau_align = np.int64(int(tau_align_ps))
+    tau_align = np.int64(int(round(float(tau_align_ps))))
     t_b_corr = t_b - tau_align  # globally corrected B timestamps
 
     origin = np.int64(origin_ps)
@@ -379,28 +797,128 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
     guard_bins = int(args.guard_bins)
     origin_ps = int(args.frame_origin_ps)
     chunk_size = int(args.chunk_size)
+    frame_period_ps = dim * bw
+
+    # --- Load timetags first: both the delay calibration and (optionally) the
+    #     residual-delay window are derived from the acquisition itself ---
+    ttbin = Path(args.ttbin)
+    cache_dir = out_dir / "_tag_cache"
+    tags = load_tags(ttbin, cache_dir, int(args.raw_ch_a_id), int(args.raw_ch_b_id), args.max_events)
+    if tags.t_a.size == 0 or tags.t_b.size == 0:
+        channel_counts = tags.meta.get("channel_counts") or {}
+        present = sorted(int(k) for k in channel_counts.keys())
+        raise RuntimeError(
+            f"No events found for channel A={int(args.raw_ch_a_id)} / "
+            f"B={int(args.raw_ch_b_id)} in {ttbin}. "
+            f"Channels present in the file: {present if present else 'unknown'}. "
+            f"Check --raw-ch-a-id / --raw-ch-b-id."
+        )
+    print(f"Loaded {tags.t_a.size:,} A events, {tags.t_b.size:,} B events from {ttbin.name}")
+
+    # --- Resolve tau_align_ps: explicit > ttbin correlation > peaks CSV ---
+    peaks_csv = Path(args.peaks_csv) if args.peaks_csv else None
+    auto_kwargs: dict[str, Any] = {
+        "search_window_ps": int(args.tau_search_window_ps),
+        "coarse_bin_ps": int(args.tau_coarse_bin_ps),
+        "smooth_ps": int(args.tau_smooth_ps),
+        "refine": bool(args.tau_refine),
+        "refine_window_ps": int(args.tau_refine_window_ps),
+        "refine_bin_ps": int(args.tau_refine_bin_ps),
+    }
+    tau_align_ps, tau_align_source, tau_auto = resolve_tau_align_ps(
+        t_a=tags.t_a,
+        t_b=tags.t_b,
+        explicit_tau_align_ps=args.tau_align_ps,
+        peaks_csv=peaks_csv,
+        force_auto=bool(args.tau_auto),
+        auto_kwargs=auto_kwargs,
+    )
+    print(f"tau_align_ps = {tau_align_ps:.0f} ps (source: {tau_align_source})")
+    if tau_auto is not None:
+        coarse_peak = tau_auto["coarse"]
+        refined = tau_auto.get("refine")
+        print(
+            f"  correlation: {tau_auto['n_pairs']:,} A-B pairs within "
+            f"+/-{tau_auto['search_window_ps']} ps | coarse peak = "
+            f"{coarse_peak['peak_ps']:.1f} ps ({coarse_peak['bin_ps']:g} ps bins, "
+            f"{coarse_peak['significance']:.1f} sigma)"
+        )
+        if refined is not None:
+            used = bool(tau_auto.get("refine_used", True))
+            print(
+                f"  refined: centre of +/-{refined['half_window_ps']} ps cluster = "
+                f"{refined['peak_ps']:.2f} ps ({refined['bin_ps']:g} ps bins, "
+                f"{refined['significance']:.1f} sigma, {'used' if used else 'rejected: weak'})"
+            )
+        if coarse_peak["significance"] < 5.0:
+            print(
+                "  WARNING: weak correlation peak (<5 sigma); the delay calibration may be "
+                "unreliable. Check the channels/window or pass --tau-align-ps explicitly."
+            )
+        if int(tau_auto["n_pairs"]) < TAU_AUTO_MIN_TRUSTED_PAIRS:
+            print(
+                f"  WARNING: only {int(tau_auto['n_pairs']):,} A-B pairs inside the search window; "
+                "the automatic delay can lock onto a background fluctuation. Verify "
+                "residual_tau_histogram.png or pass --tau-align-ps."
+            )
+        if int(coarse_peak.get("n_near_equal", 0)) > 1:
+            print(
+                f"  note: {coarse_peak['n_near_equal']} near-equal correlation clusters "
+                "(comb / multi-mode structure); the delay is a mode selection - pin it with "
+                "--tau-align-ps or --peaks-csv when comparing runs."
+            )
+        if coarse_peak.get("at_search_edge"):
+            print(
+                f"  WARNING: correlation peak sits at the search-window edge; widen "
+                f"--tau-search-window-ps (currently {tau_auto['search_window_ps']} ps)."
+            )
 
     # --- Delay range resolution ---
+    default_half_ps = frame_period_ps // 2 - guard_bins * bw
+    delay_center_ps = 0
+    delay_range_auto_centered = False
     if args.delay_min_ps is not None and args.delay_max_ps is not None:
         delay_min_ps = int(args.delay_min_ps)
         delay_max_ps = int(args.delay_max_ps)
-    elif args.delay_window_ps is not None:
-        w = int(args.delay_window_ps)
-        delay_min_ps, delay_max_ps = -w, w
     else:
-        frame_period_ps = dim * bw
-        guard_ps = guard_bins * bw
-        half_margin = frame_period_ps // 2 - guard_ps
-        delay_min_ps, delay_max_ps = -half_margin, half_margin
-        print(
-            f"NOTE: No --delay-min-ps/--delay-max-ps or --delay-window-ps specified.\n"
-            f"      Using default delay range [{delay_min_ps}, {delay_max_ps}] ps.\n"
-            f"      Consider inspecting residual_tau_histogram.png and setting\n"
-            f"      --delay-min-ps / --delay-max-ps explicitly for optimal range."
-        )
+        if bool(args.auto_delay_range):
+            residual_peak_ps, residual_trusted, residual_info = _measure_residual_peak_ps(
+                tags.t_a,
+                tags.t_b,
+                tau_align_ps,
+                tau_auto=tau_auto,
+                auto_kwargs=auto_kwargs,
+            )
+            if residual_trusted:
+                delay_center_ps = int(round(residual_peak_ps))
+                delay_range_auto_centered = True
+                print(
+                    f"NOTE: --auto-delay-range centers the residual window on the measured "
+                    f"peak at {residual_peak_ps:+.1f} ps."
+                )
+            else:
+                significance = residual_info.get("significance")
+                significance_text = "n/a" if significance is None else f"{significance:.1f} sigma"
+                print(
+                    f"  WARNING: --auto-delay-range measured a residual peak at "
+                    f"{residual_peak_ps:+.1f} ps but it is not trustworthy "
+                    f"({residual_info['n_pairs']:,} pairs, {significance_text}); "
+                    f"keeping the window centred at 0 ps. "
+                    f"Pass --tau-align-ps / --peaks-csv or inspect residual_tau_histogram.png."
+                )
+        if args.delay_window_ps is not None:
+            half_ps = int(args.delay_window_ps)
+        else:
+            half_ps = default_half_ps
+            print(
+                f"NOTE: No --delay-min-ps/--delay-max-ps or --delay-window-ps specified.\n"
+                f"      Using default delay range "
+                f"[{delay_center_ps - half_ps}, {delay_center_ps + half_ps}] ps.\n"
+                f"      Inspect residual_tau_histogram.png if the residual peak is not near 0 ps."
+            )
+        delay_min_ps, delay_max_ps = delay_center_ps - half_ps, delay_center_ps + half_ps
 
-    frame_period_ps = dim * bw
-    delay_span_ps = delay_max_ps - delay_min_ps
+    delay_span_ps = int(delay_max_ps - delay_min_ps)
     delay_span_warning: str | None = None
     if delay_span_ps >= frame_period_ps:
         delay_span_warning = (
@@ -410,18 +928,6 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         warnings.warn(delay_span_warning, stacklevel=2)
         print(f"WARNING: {delay_span_warning}")
 
-    # --- Load timetags ---
-    ttbin = Path(args.ttbin)
-    cache_dir = out_dir / "_tag_cache"
-    tags = load_tags(ttbin, cache_dir, int(args.raw_ch_a_id), int(args.raw_ch_b_id), args.max_events)
-    if tags.t_a.size == 0 or tags.t_b.size == 0:
-        raise RuntimeError(f"No events found in {ttbin}")
-    print(f"Loaded {tags.t_a.size:,} A events, {tags.t_b.size:,} B events from {ttbin.name}")
-
-    # --- Resolve tau_align_ps ---
-    peaks_csv = Path(args.peaks_csv)
-    tau_align_ps, tau_align_source = infer_tau_align_brightest(peaks_csv, args.tau_align_ps)
-    print(f"tau_align_ps = {tau_align_ps:.0f} ps (source: {tau_align_source})")
     print(f"Delay range: [{delay_min_ps}, {delay_max_ps}] ps  (span = {delay_span_ps} ps)")
 
     # --- Build raw-aligned JTI ---
@@ -493,6 +999,9 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         "pairing_mode": "global_residual_delay_window",
         "tau_align_ps": tau_align_ps,
         "tau_align_source": tau_align_source,
+        "tau_auto": tau_auto,
+        "delay_window_center_ps": delay_center_ps,
+        "delay_range_auto_centered": delay_range_auto_centered,
         "frame_origin_ps": origin_ps,
         "binwidth_ps": bw,
         "dimension": dim,
@@ -518,14 +1027,8 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         **diag_diag,
     }
 
-    meta_path = out_dir / "raw_aligned_meta.json"
-    meta_path.write_text(
-        json.dumps(raw_aligned_meta, ensure_ascii=False, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
-    print(f"Saved: {meta_path}")
-
-    # --- SVD/K computation (optional) ---
+    # --- SVD/K computation (optional, must run before the metadata is written
+    #     so that K/purity/lambda fields land in raw_aligned_meta.json) ---
     if getattr(args, "compute_svd", False):
         svd = _compute_svd_k(H)
         raw_aligned_meta.update(svd)
@@ -538,10 +1041,21 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         lambda3 = float(lam[2]) if lam.size > 2 else float("nan")
         lambda5_cumsum = float(cumsum[4]) if lam.size > 4 else float("nan")
         lambda10_cumsum = float(cumsum[9]) if lam.size > 9 else float("nan")
+        raw_aligned_meta.update(
+            {
+                "lambda1": lambda1,
+                "lambda2": lambda2,
+                "lambda3": lambda3,
+                "lambda5_cumsum": lambda5_cumsum,
+                "lambda10_cumsum": lambda10_cumsum,
+            }
+        )
 
         # Write summary.csv
         guard_ps = guard_bins * bw
         summary_row = {
+            "tau_align_ps": tau_align_ps,
+            "tau_align_source": tau_align_source,
             "binwidth_ps": bw,
             "dimension": dim,
             "frame_period_ps": frame_period_ps,
@@ -573,6 +1087,13 @@ def run_raw_aligned(args: argparse.Namespace) -> dict[str, Any]:
         print(f"  K_raw_aligned = {svd['K_raw_aligned']:.4f}, purity = {svd['purity']:.6f}, "
               f"n_sv = {svd['n_singular_values']}")
 
+    meta_path = out_dir / "raw_aligned_meta.json"
+    meta_path.write_text(
+        json.dumps(raw_aligned_meta, ensure_ascii=False, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+    print(f"Saved: {meta_path}")
+
     return raw_aligned_meta
 
 
@@ -587,12 +1108,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Required
     ap.add_argument("--ttbin", required=True, help="Path to .1.ttbin file.")
-    ap.add_argument("--peaks-csv", required=True, help="Path to pminus_peaks.csv.")
     ap.add_argument("--out", required=True, help="Output directory.")
 
-    # Tau alignment
+    # Tau alignment (delay calibration)
+    ap.add_argument("--peaks-csv", default=None,
+                    help="Optional peaks CSV with delay_ps/counts columns used to infer "
+                         "tau_align_ps from its brightest peak. Omit it to calibrate the delay "
+                         "directly from the .ttbin time-tag correlation.")
     ap.add_argument("--tau-align-ps", type=float, default=None,
-                    help="Explicit tau_align_ps (ps). If omitted, auto-determined from peaks CSV.")
+                    help="Explicit tau_align_ps (ps); overrides every automatic estimate.")
+    ap.add_argument("--tau-auto", action="store_true", default=False,
+                    help="Calibrate tau_align_ps from the .ttbin time-tag correlation even "
+                         "when --peaks-csv is given.")
+    ap.add_argument("--tau-search-window-ps", type=int, default=DEFAULT_TAU_SEARCH_WINDOW_PS,
+                    help="Half-width of the A-B correlation search window (ps).")
+    ap.add_argument("--tau-coarse-bin-ps", type=int, default=DEFAULT_TAU_COARSE_BIN_PS,
+                    help="Coarse correlation histogram bin width (ps).")
+    ap.add_argument("--tau-smooth-ps", type=int, default=DEFAULT_TAU_SMOOTH_PS,
+                    help="Boxcar smoothing width applied to the coarse correlation histogram (ps).")
+    ap.add_argument("--tau-refine", action=argparse.BooleanOptionalAction, default=True,
+                    help="Refine the coarse delay with a fine second correlation pass (default: on).")
+    ap.add_argument("--tau-refine-window-ps", type=int, default=DEFAULT_TAU_REFINE_WINDOW_PS,
+                    help="Half-width of the cluster used for the fine centroid re-centring (ps).")
+    ap.add_argument("--tau-refine-bin-ps", type=int, default=DEFAULT_TAU_REFINE_BIN_PS,
+                    help="Fine correlation histogram bin width used by the centroid pass (ps).")
 
     # Frame geometry
     ap.add_argument("--frame-origin-ps", type=float, default=0.0,
@@ -610,7 +1149,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--delay-max-ps", type=int, default=None,
                     help="Upper bound of global residual-delay window (ps).")
     ap.add_argument("--delay-window-ps", type=int, default=None,
-                    help="Shorthand: sets delay_min=-W, delay_max=+W.")
+                    help="Shorthand for the residual-delay half-width: delay_min=-W, delay_max=+W "
+                         "(or center+/-W with --auto-delay-range).")
+    ap.add_argument("--auto-delay-range", action="store_true", default=False,
+                    help="Center the residual-delay window on the measured residual peak instead "
+                         "of 0 ps; useful after an explicit or peaks-CSV tau that sits off zero.")
 
     # TimeTagger channels
     ap.add_argument("--raw-ch-a-id", type=int, default=2,

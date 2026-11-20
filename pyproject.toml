@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jti-extract"
-version = "0.3.0"
-description = "Raw-aligned FPC JTI extraction from TimeTagger .ttbin data."
+version = "0.3.1"
+description = "Raw-aligned JTI extraction from TimeTagger .ttbin data with automatic delay calibration."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }

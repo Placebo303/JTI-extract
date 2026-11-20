@@ -1,6 +1,6 @@
 # Documentation Index
 
-- [CLI 参考](CLI.md) — `jti-raw-aligned` 完整参数说明
+- [CLI 参考](CLI.md) — `jti-raw-aligned` 完整参数说明（含从 `.ttbin` 自动确定延时）
 - [工作流](WORKFLOWS.md) — 常见分析流程
 - [输出格式](OUTPUTS.md) — 输出文件 schema
 - [SVD/K 算法](SCHMIDT_ANALYSIS.md) — Schmidt-like K 计算
