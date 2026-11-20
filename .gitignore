@@ -11,6 +11,9 @@ build/
 dist/
 *.egg-info/
 
+# Node.js tooling (node_modules is a junction to an external AI/runtime cache here)
+node_modules/
+
 # Raw data and large outputs
 *.ttbin
 *.npz
